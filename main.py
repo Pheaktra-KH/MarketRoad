@@ -5,6 +5,7 @@ import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.client.bot import DefaultBotProperties
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -33,8 +34,8 @@ async def main():
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     await prepare_db(pool)
 
-    # use async context manager for the Bot so it's closed cleanly
-    async with Bot(token=BOT_TOKEN, parse_mode="HTML") as bot:
+    # Use DefaultBotProperties to set default parse_mode (aiogram >= 3.7)
+    async with Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML")) as bot:
         dp = Dispatcher()
 
         @dp.message(Command("start"))
