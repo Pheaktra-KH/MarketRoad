@@ -7,7 +7,6 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.bot import DefaultBotProperties
 
-# Configure logging to output to stdout so Railway shows it in logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -53,17 +52,26 @@ async def _run():
         await pool.close()
         return
 
-    # Use DefaultBotProperties to set default parse_mode (aiogram >= 3.7)
     try:
+        # Use DefaultBotProperties for parse_mode (aiogram >= 3.7)
         async with Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML")) as bot:
-            logger.info("Bot client created, initializing dispatcher...")
+            logger.info("Bot client created, deleting webhook (if any) and starting dispatcher...")
+
+            # IMPORTANT: remove webhook before polling to avoid TelegramConflictError
+            try:
+                await bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Webhook deleted (if existed).")
+            except Exception:
+                logger.exception("Error deleting webhook (continuing to polling)")
+
             dp = Dispatcher()
 
             @dp.message(Command("start"))
             async def cmd_start(message: Message):
+                # Use <code> for the 'text' placeholder so HTML parse_mode does not treat '<text>' as an invalid tag
                 await message.answer(
                     "✅ Bot is up! Try:\n"
-                    "/add <text> — add an item\n"
+                    "/add <code>text</code> — add an item\n"
                     "/list — show your last 10 items"
                 )
 
