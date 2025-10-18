@@ -14,57 +14,68 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
+
 async def prepare_db(pool):
     async with pool.acquire() as conn:
-        await conn.execute("""
+        await conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS items (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
                 title TEXT NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
-        """)
+            """
+        )
+
 
 async def main():
-    bot = Bot(token=BOT_TOKEN, parse_mode="HTML")
-    dp = Dispatcher()
-
     pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
     await prepare_db(pool)
 
-    @dp.message(Command("start"))
-    async def cmd_start(message: Message):
-        await message.answer("✅ Bot is up! Try:
-/add <text> — add an item
-/list — show your last 10 items")
+    # use async context manager for the Bot so it's closed cleanly
+    async with Bot(token=BOT_TOKEN, parse_mode="HTML") as bot:
+        dp = Dispatcher()
 
-    @dp.message(Command("add"))
-    async def cmd_add(message: Message):
-        title = message.text.partition(" ")[2].strip()
-        if not title:
-            return await message.answer("Usage: <code>/add your item text</code>")
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO items (user_id, title) VALUES ($1, $2)",
-                message.from_user.id, title
+        @dp.message(Command("start"))
+        async def cmd_start(message: Message):
+            await message.answer(
+                "✅ Bot is up! Try:\n"
+                "/add <text> — add an item\n"
+                "/list — show your last 10 items"
             )
-        await message.answer("➕ Added!")
 
-    @dp.message(Command("list"))
-    async def cmd_list(message: Message):
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT id, title, created_at FROM items WHERE user_id=$1 ORDER BY id DESC LIMIT 10",
-                message.from_user.id
-            )
-        if not rows:
-            return await message.answer("No items yet. Add one with /add")
-        lines = "
-".join(f"{r['id']}. {r['title']}" for r in rows)
-        await message.answer(f"🗂️ Your items:
-{lines}")
+        @dp.message(Command("add"))
+        async def cmd_add(message: Message):
+            # safely extract the text after the command
+            text = message.text or ""
+            title = text.partition(" ")[2].strip()
+            if not title:
+                return await message.answer("Usage: <code>/add your item text</code>")
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO items (user_id, title) VALUES ($1, $2)",
+                    message.from_user.id,
+                    title,
+                )
+            await message.answer("➕ Added!")
 
-    await dp.start_polling(bot)
+        @dp.message(Command("list"))
+        async def cmd_list(message: Message):
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, title, created_at FROM items WHERE user_id=$1 ORDER BY id DESC LIMIT 10",
+                    message.from_user.id,
+                )
+            if not rows:
+                return await message.answer("No items yet. Add one with /add")
+            lines = "\n".join(f"{r['id']}. {r['title']}" for r in rows)
+            await message.answer(f"🗂️ Your items:\n{lines}")
+
+        await dp.start_polling(bot)
+
+    await pool.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
