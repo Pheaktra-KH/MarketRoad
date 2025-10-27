@@ -58,7 +58,7 @@ async def upsert_user(pool, user: types.User):
             user.last_name,
             user.username,
             getattr(user, "language_code", "unknown"),
-            user.as_json(),
+            user.model_dump_json(),   # ✅ fixed here
         )
 
 
