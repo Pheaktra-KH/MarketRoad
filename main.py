@@ -117,8 +117,8 @@ async def main():
         data["pool"] = pool
         return await handler(event, data)
 
-    await dp.start_polling(bot, allowed_updates=types.AllowedUpdates.all())
-
+    # ✅ simplified for Aiogram v3
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
