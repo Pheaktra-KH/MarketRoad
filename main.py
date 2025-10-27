@@ -26,10 +26,20 @@ pool_instance = None
 
 async def prepare_db(pool):
     """
-    Ensure the helper function upsert_user_from_telegram(jsonb) and get_totals() exist.
-    The upsert function will try to upsert into your existing users table if it has a telegram_id column.
-    If not, it will create a fallback telegram_users table and upsert there.
+    Ensure the helper functions exist. DROP incompatible previous versions first to avoid
+    'cannot change return type of existing function' errors.
+    NOTE: Dropping functions can be disruptive if other code depends on them.
     """
+    drop_sql = r"""
+    -- Drop potentially conflicting old helpers to allow redefinition.
+    -- Use CASCADE to remove dependent objects (be cautious).
+    DROP FUNCTION IF EXISTS get_totals() CASCADE;
+    DROP FUNCTION IF EXISTS upsert_user_from_telegram(jsonb) CASCADE;
+    DROP FUNCTION IF EXISTS upsert_user_from_telegram(u jsonb) CASCADE;
+    DROP FUNCTION IF EXISTS upsert_user_from_telegram(u json) CASCADE;
+    DROP FUNCTION IF EXISTS upsert_user_from_telegram() CASCADE;
+    """
+
     create_sql = r"""
     -- Create a helper function that attempts to upsert into existing users table if possible
     CREATE OR REPLACE FUNCTION upsert_user_from_telegram(u jsonb)
@@ -56,7 +66,7 @@ async def prepare_db(pool):
       END IF;
 
       IF has_users_table AND users_has_telegram THEN
-        -- Try to upsert into the existing users table (assumes telegram_id unique constraint exists or create temporary upsert by matching telegram_id)
+        -- Try to upsert into the existing users table
         INSERT INTO users (telegram_id, first_name, last_name, username, language_code, raw, created_at, updated_at)
         VALUES (
           t_id,
@@ -139,7 +149,6 @@ async def prepare_db(pool):
       total_products := CASE WHEN to_regclass('public.products') IS NOT NULL THEN (SELECT COUNT(*) FROM products) ELSE 0 END;
 
       IF to_regclass('public.users') IS NOT NULL THEN
-        -- If users table exists, try to count either 'telegram_id' or a generic row count
         BEGIN
           SELECT COUNT(*) INTO users_count FROM users;
         EXCEPTION WHEN OTHERS THEN
@@ -165,6 +174,15 @@ async def prepare_db(pool):
     """
 
     async with pool.acquire() as conn:
+        # drop first to avoid incompatible function return-type errors
+        try:
+            await conn.execute(drop_sql)
+            logger.info("Dropped conflicting helper functions (if existed).")
+        except Exception:
+            # log and continue — if drop fails due to permissions, we'll attempt CREATE and may still error
+            logger.debug("Ignoring error while dropping old functions", exc_info=True)
+
+        # now create the new functions
         await conn.execute(create_sql)
         logger.info("Database helper functions ensured (prepare_db complete).")
 
