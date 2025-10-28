@@ -128,19 +128,19 @@ async def cmd_start(message: types.Message, pool):
     channel_link = format_tg_link(TELEGRAM_CHANNEL_ID)
     group_link = format_tg_link(TELEGRAM_GROUP_ID)
 
-if channel_link or group_link:
-    row = []
-    if channel_link:
-        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
-    if group_link:
-        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
-    buttons.append(row)
-
-buttons.append([
-    types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
-])
-
-markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    if channel_link or group_link:
+        row = []
+        if channel_link:
+            row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+        if group_link:
+            row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+        buttons.append(row)
+    
+    buttons.append([
+        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
+    ])
+    
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
     # Add "Start Shopping" button
     buttons.append([
