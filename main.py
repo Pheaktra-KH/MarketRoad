@@ -9,7 +9,6 @@ from aiogram.client.bot import DefaultBotProperties
 from dotenv import load_dotenv
 from datetime import datetime
 
-
 # ------------------------------------------------
 # Setup logging and load environment variables
 # ------------------------------------------------
