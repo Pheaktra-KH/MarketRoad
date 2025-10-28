@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 import asyncpg
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
@@ -21,9 +21,9 @@ TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
 print("DEBUG ENV CHECK:")
-print("BOT_TOKEN:", bool(os.getenv("BOT_TOKEN")))
-print("CHANNEL:", os.getenv("TELEGRAM_CHANNEL_ID"))
-print("GROUP:", os.getenv("TELEGRAM_GROUP_ID"))
+print("BOT_TOKEN:", bool(BOT_TOKEN))
+print("CHANNEL:", TELEGRAM_CHANNEL_ID)
+print("GROUP:", TELEGRAM_GROUP_ID)
 
 # ------------------------------------------------
 # Initialize bot and database
@@ -63,7 +63,7 @@ async def upsert_user(pool, user: types.User):
             user.last_name,
             user.username,
             getattr(user, "language_code", "unknown"),
-            user.model_dump_json(),   # ✅ fixed here
+            user.model_dump_json(),
         )
 
 
@@ -79,6 +79,26 @@ async def get_summary(pool):
         """) if await conn.fetchval("SELECT to_regclass('orders')") else 0
 
     return shop_count, product_count, user_count, order_count
+
+
+# ------------------------------------------------
+# Utility: normalize Telegram links
+# ------------------------------------------------
+def normalize_tg_link(value: str | None) -> str | None:
+    """
+    Accepts: '@username', 'https://t.me/username', '-1001234567890'
+    Returns a usable https URL or None.
+    """
+    if not value:
+        return None
+    v = value.strip()
+    if v.startswith("http://") or v.startswith("https://"):
+        return v
+    if v.startswith("@"):
+        return f"https://t.me/{v[1:]}"
+    if v.startswith("-100"):
+        return None  # Can't convert safely to link
+    return f"https://t.me/{v}"
 
 
 # ------------------------------------------------
@@ -109,57 +129,47 @@ async def cmd_start(message: types.Message, pool):
         "Stay connected or start exploring below 👇"
     )
 
-    # --- Buttons ---
+    # --- Build Buttons ---
+    channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
+    group_link = normalize_tg_link(TELEGRAM_GROUP_ID)
+
+    print("[DEBUG LINKS]")
+    print("Raw channel:", TELEGRAM_CHANNEL_ID)
+    print("Raw group:", TELEGRAM_GROUP_ID)
+    print("Parsed channel link:", channel_link)
+    print("Parsed group link:", group_link)
+
     buttons = []
 
-    # Helper function to normalize t.me links or @handles
-    def format_tg_link(value: str):
-        if not value:
-            return None
-        value = value.strip()
-        if value.startswith("http"):
-            return value
-        if value.startswith("@"):
-            return f"https://t.me/{value[1:]}"
-        if value.startswith("-100"):
-            return f"https://t.me/c/{value[4:]}"  # for private supergroups
-        return f"https://t.me/{value}"
-
-    channel_link = format_tg_link(TELEGRAM_CHANNEL_ID)
-    group_link = format_tg_link(TELEGRAM_GROUP_ID)
-
-    if channel_link or group_link:
-        row = []
-        if channel_link:
-            row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
-        if group_link:
-            row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+    # Channel and Group on same row if available
+    row = []
+    if channel_link:
+        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+    if group_link:
+        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+    if row:
         buttons.append(row)
-    
+
+    # Always add Start Shopping button
     buttons.append([
         types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
-    ])
-    
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    # Add "Start Shopping" button
-    buttons.append([
-        types.InlineKeyboardButton(
-            text="🛒 Start Shopping",
-            callback_data="start_shopping"
-        )
     ])
 
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
-@dp.callback_query(lambda c: c.data == "start_shopping")
+
+# ------------------------------------------------
+# Callback for "Start Shopping"
+# ------------------------------------------------
+@dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
-    await callback_query.answer()  # Acknowledge the button press
+    await callback_query.answer()
     await callback_query.message.answer(
         "🛍️ Great! Let's start shopping.\n\n"
         "You can browse shops, search for products, or check today’s best deals."
     )
+
 
 # ------------------------------------------------
 # Run bot
@@ -174,8 +184,8 @@ async def main():
         data["pool"] = pool
         return await handler(event, data)
 
-    # ✅ simplified for Aiogram v3
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     try:
