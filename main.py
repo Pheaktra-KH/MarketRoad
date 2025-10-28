@@ -106,22 +106,35 @@ async def cmd_start(message: types.Message, pool):
     )
 
     # --- Buttons ---
+    # --- Buttons ---
     buttons = []
-    if TELEGRAM_CHANNEL_ID:
-        buttons.append(
-            [types.InlineKeyboardButton(
-                text="📢 Join our Channel",
-                url=f"https://t.me/{TELEGRAM_CHANNEL_ID.lstrip('@')}"
-            )]
-        )
-    if TELEGRAM_GROUP_ID:
-        buttons.append(
-            [types.InlineKeyboardButton(
-                text="💬 Join our Group",
-                url=f"https://t.me/{TELEGRAM_GROUP_ID.lstrip('@')}"
-            )]
-        )
-    # Add "Start Shopping" callback button
+
+    # Helper function to normalize t.me links or @handles
+    def format_tg_link(value: str):
+        if not value:
+            return None
+        value = value.strip()
+        if value.startswith("http"):
+            return value
+        if value.startswith("@"):
+            return f"https://t.me/{value[1:]}"
+        if value.startswith("-100"):
+            return f"https://t.me/c/{value[4:]}"  # for private supergroups
+        return f"https://t.me/{value}"
+
+    channel_link = format_tg_link(TELEGRAM_CHANNEL_ID)
+    group_link = format_tg_link(TELEGRAM_GROUP_ID)
+
+    if channel_link:
+        buttons.append([
+            types.InlineKeyboardButton(text="📢 Join our Channel", url=channel_link)
+        ])
+    if group_link:
+        buttons.append([
+            types.InlineKeyboardButton(text="💬 Join our Group", url=group_link)
+        ])
+
+    # Add "Start Shopping" button
     buttons.append([
         types.InlineKeyboardButton(
             text="🛒 Start Shopping",
@@ -130,7 +143,6 @@ async def cmd_start(message: types.Message, pool):
     ])
 
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-
     await message.answer(summary_text, reply_markup=markup)
 
 @dp.callback_query(lambda c: c.data == "start_shopping")
