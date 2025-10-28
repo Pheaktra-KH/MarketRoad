@@ -83,27 +83,63 @@ async def get_summary(pool):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, pool):
     user = message.from_user
-
-    # Save or update user in DB
     await upsert_user(pool, user)
 
-    # Fetch totals
+    # --- First message: welcome ---
+    welcome_text = (
+        f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\n"
+        "We're glad to have you here.\n"
+        "Explore shops, discover new products, and enjoy your shopping experience!"
+    )
+    await message.answer(welcome_text)
+
+    # --- Fetch summary ---
     shops, products, users, today_orders = await get_summary(pool)
 
-    # Compose welcome message
-    welcome_text = (
-        f"👋 <b>Welcome, {user.first_name}!</b>\n\n"
-        f"📦 Total Shops: <b>{shops}</b>\n"
+    summary_text = (
+        f"📊 <b>Today's Summary</b>\n\n"
+        f"🏬 Total Shops: <b>{shops}</b>\n"
         f"🛍️ Products: <b>{products}</b>\n"
         f"👥 Users: <b>{users}</b>\n"
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        f"🔗 Join our community:\n"
-        f"• Channel: {TELEGRAM_CHANNEL_ID or 'N/A'}\n"
-        f"• Group: {TELEGRAM_GROUP_ID or 'N/A'}"
+        "Stay connected or start exploring below 👇"
     )
 
-    await message.answer(welcome_text)
+    # --- Buttons ---
+    buttons = []
+    if TELEGRAM_CHANNEL_ID:
+        buttons.append(
+            [types.InlineKeyboardButton(
+                text="📢 Join our Channel",
+                url=f"https://t.me/{TELEGRAM_CHANNEL_ID.lstrip('@')}"
+            )]
+        )
+    if TELEGRAM_GROUP_ID:
+        buttons.append(
+            [types.InlineKeyboardButton(
+                text="💬 Join our Group",
+                url=f"https://t.me/{TELEGRAM_GROUP_ID.lstrip('@')}"
+            )]
+        )
+    # Add "Start Shopping" callback button
+    buttons.append([
+        types.InlineKeyboardButton(
+            text="🛒 Start Shopping",
+            callback_data="start_shopping"
+        )
+    ])
 
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer(summary_text, reply_markup=markup)
+
+@dp.callback_query(lambda c: c.data == "start_shopping")
+async def start_shopping_callback(callback_query: types.CallbackQuery):
+    await callback_query.answer()  # Acknowledge the button press
+    await callback_query.message.answer(
+        "🛍️ Great! Let's start shopping.\n\n"
+        "You can browse shops, search for products, or check today’s best deals."
+    )
 
 # ------------------------------------------------
 # Run bot
