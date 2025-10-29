@@ -314,6 +314,110 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
 
     await callback_query.message.answer(user_text, reply_markup=markup)
 
+# ------------------------------------------------
+# Callback: View Orders (Paginated)
+# ------------------------------------------------
+@dp.callback_query(F.data.startswith("view_orders"))
+async def view_orders_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+
+    # Extract page number (default 1)
+    parts = callback_query.data.split(":")
+    page = int(parts[1]) if len(parts) > 1 else 1
+    limit = 5
+    offset = (page - 1) * limit
+
+    async with pool.acquire() as conn:
+        total_orders = await conn.fetchval("SELECT COUNT(*) FROM orders WHERE user_id = $1;", user_id)
+        orders = await conn.fetch("""
+            SELECT o.id, o.total, o.created_at, p.name AS product_name, s.name AS shop_name
+            FROM orders o
+            LEFT JOIN products p ON o.product_id = p.id
+            LEFT JOIN shops s ON p.shop_id = s.id
+            WHERE o.user_id = $1
+            ORDER BY o.created_at DESC
+            LIMIT $2 OFFSET $3;
+        """, user_id, limit, offset)
+
+    if not orders:
+        await callback_query.message.answer("🧾 You don’t have any orders yet.")
+        return
+
+    total_pages = (total_orders + limit - 1) // limit
+    text = "<b>🧾 Your Orders</b>\n\n"
+
+    for order in orders:
+        text += (
+            f"• <b>{order['product_name'] or 'Unknown Product'}</b>\n"
+            f"  🏪 {order['shop_name'] or 'N/A'}\n"
+            f"  💰 ${float(order['total']):,.2f}\n"
+            f"  📅 {order['created_at'].strftime('%Y-%m-%d')}\n\n"
+        )
+
+    # Navigation buttons
+    buttons = []
+    if page > 1:
+        buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"view_orders:{page-1}"))
+    if page < total_pages:
+        buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"view_orders:{page+1}"))
+
+    nav = [buttons] if buttons else []
+    nav.append([types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")])
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=nav)
+    await callback_query.message.answer(text, reply_markup=markup)
+
+# ------------------------------------------------
+# Callback: Edit Profile Menu
+# ------------------------------------------------
+@dp.callback_query(F.data == "edit_profile")
+async def edit_profile_menu(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+
+    text = (
+        "✏️ <b>Edit Your Profile</b>\n\n"
+        "Choose what you'd like to update:"
+    )
+
+    buttons = [
+        [types.InlineKeyboardButton("📞 Phone", callback_data="edit_field:phone")],
+        [types.InlineKeyboardButton("📧 Email", callback_data="edit_field:email")],
+        [types.InlineKeyboardButton("🏙️ City", callback_data="edit_field:city")],
+        [types.InlineKeyboardButton("🌐 Language", callback_data="edit_field:language")],
+        [types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback_query.message.answer(text, reply_markup=markup)
+
+# ------------------------------------------------
+# Message Handler: Update Field
+# ------------------------------------------------
+@dp.message(F.text)
+async def update_field_handler(message: types.Message, pool):
+    if "pending_field" not in dp:
+        return  # not editing
+
+    user_id, field = dp["pending_field"]
+    if message.from_user.id != user_id:
+        return
+
+    new_value = message.text.strip()
+    valid_fields = ["phone", "email", "city", "language"]
+
+    if field not in valid_fields:
+        await message.answer("⚠️ Invalid field.")
+        return
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE telegram_id = $2;",
+            new_value, user_id
+        )
+
+    del dp["pending_field"]
+    await message.answer(f"✅ Your {field} has been updated successfully.")
+
 
 # ------------------------------------------------
 # Run bot
