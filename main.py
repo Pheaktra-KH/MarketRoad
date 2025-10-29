@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 
 # ------------------------------------------------
-# Setup logging and load environment variables
+# Setup logging and environment
 # ------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -21,7 +21,7 @@ TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
 # ------------------------------------------------
-# Initialize bot and database
+# Initialize bot and dispatcher
 # ------------------------------------------------
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -83,17 +83,17 @@ async def cmd_start(message: types.Message, pool):
     user = message.from_user
     await upsert_user(pool, user)
 
-    welcome_text = f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\nExplore shops, discover products, and enjoy shopping!"
+    welcome_text = f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\nExplore shops, discover new products, and enjoy shopping!"
     await message.answer(welcome_text)
 
     shops, products, users, today_orders = await get_summary(pool)
     summary_text = (
         f"📊 <b>Today's Summary</b>\n\n"
-        f"🏬 Shops: <b>{shops}</b>\n"
+        f"🏬 Total Shops: <b>{shops}</b>\n"
         f"🛍️ Products: <b>{products}</b>\n"
         f"👥 Users: <b>{users}</b>\n"
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        "Choose below to start 👇"
+        "Stay connected or start exploring below 👇"
     )
 
     channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
@@ -119,13 +119,15 @@ async def cmd_start(message: types.Message, pool):
 async def start_shopping_callback(callback_query: types.CallbackQuery):
     await callback_query.answer()
 
-    text = (
-        "🛍️ <b>Shop Menu</b>\n\n"
+    shop_menu_text = (
+        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
+        "Here are some things you can do:\n"
         "• 🏬 Browse all shops\n"
         "• 🔍 Search for products\n"
-        "• 💰 Check today’s deals\n"
-        "• 🧾 View your orders\n"
-        "• ⚙️ Access your dashboard"
+        "• 💰 Check today’s best deals\n"
+        "• ⚙️ Access your user dashboard\n"
+        "• 🧾 View your orders\n\n"
+        "Select an option below to begin 👇"
     )
 
     buttons = [
@@ -136,25 +138,44 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
         [types.InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(text, reply_markup=markup)
+    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: Back to Home
+# Callback: Back to Home Menu
 # ------------------------------------------------
 @dp.callback_query(F.data == "back_home")
 async def back_home_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
+    user = callback_query.from_user
+
     shops, products, users, today_orders = await get_summary(pool)
-    text = (
+    summary_text = (
         f"🏠 <b>Home Menu</b>\n\n"
-        f"🏬 Shops: {shops}\n🛍️ Products: {products}\n👥 Users: {users}\n🧾 Orders Today: {today_orders}"
+        f"🏬 Shops: <b>{shops}</b>\n"
+        f"🛍️ Products: <b>{products}</b>\n"
+        f"👥 Users: <b>{users}</b>\n"
+        f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
+        "You can explore more below 👇"
     )
-    buttons = [[types.InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")]]
+
+    channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
+    group_link = normalize_tg_link(TELEGRAM_GROUP_ID)
+
+    buttons = []
+    row = []
+    if channel_link:
+        row.append(types.InlineKeyboardButton("📢 Channel", url=channel_link))
+    if group_link:
+        row.append(types.InlineKeyboardButton("💬 Group", url=group_link))
+    if row:
+        buttons.append(row)
+    buttons.append([types.InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
+
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(text, reply_markup=markup)
+    await callback_query.message.answer(summary_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: User Dashboard
+# Callback: User Dashboard (Advanced)
 # ------------------------------------------------
 @dp.callback_query(F.data == "user_settings")
 async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
@@ -180,19 +201,19 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
         f"📞 Phone: {user_info['phone'] or '-'}\n"
         f"🌍 Location: {user_info['city'] or '-'}, {user_info['country'] or '-'}\n"
         f"📅 Joined: {user_info['created_at'].strftime('%Y-%m-%d') if user_info['created_at'] else '-'}\n"
-        f"🔖 Status: {user_info['status'] or 'active'}\n\n"
+        f"🔖 Status: {user_info['status'] or 'active'}\n"
     )
 
     total_orders = order_stats['total_orders'] if order_stats else 0
     total_spent = order_stats['total_spent'] if order_stats else 0
-    user_text += f"📦 <b>Orders:</b> {total_orders} | 💰 Spent: ${float(total_spent):,.2f}\n\n"
+    user_text += f"\n📦 <b>Order Summary</b>\n🧾 Total Orders: {total_orders}\n💰 Total Spent: ${float(total_spent):,.2f}\n"
 
     if recent_orders:
-        user_text += "🕓 <b>Recent Orders</b>\n"
+        user_text += "\n🕓 <b>Recent Orders</b>\n"
         for o in recent_orders:
             user_text += f"• {o['product_name']} from {o['shop_name']} — ${float(o['total']):,.2f} ({o['created_at'].strftime('%Y-%m-%d')})\n"
     else:
-        user_text += "No recent orders yet.\n"
+        user_text += "\n🕓 No recent orders yet.\n"
 
     if user_shop:
         user_text += f"\n🏪 Your Shop: {user_shop}\n"
@@ -207,7 +228,7 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.message.answer(user_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: View Orders (Paginated)
+# View Orders (Paginated)
 # ------------------------------------------------
 @dp.callback_query(F.data.startswith("view_orders"))
 async def view_orders_callback(callback_query: types.CallbackQuery, pool):
@@ -222,11 +243,13 @@ async def view_orders_callback(callback_query: types.CallbackQuery, pool):
         orders = await conn.fetch("SELECT o.id,o.total,o.created_at,p.name AS product_name,s.name AS shop_name FROM orders o LEFT JOIN products p ON o.product_id=p.id LEFT JOIN shops s ON p.shop_id=s.id WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT $2 OFFSET $3;", user_id, limit, offset)
 
     if not orders:
-        await callback_query.message.answer("🧾 No orders found.")
+        await callback_query.message.answer("🧾 You don’t have any orders yet.")
         return
 
     pages = (total + limit - 1) // limit
-    text = "<b>🧾 Your Orders</b>\n\n" + "".join([f"• {o['product_name']} ({o['shop_name']}) — ${float(o['total']):,.2f} | {o['created_at'].strftime('%Y-%m-%d')}\n" for o in orders])
+    text = "<b>🧾 Your Orders</b>\n\n"
+    for o in orders:
+        text += f"• {o['product_name']} ({o['shop_name']}) — ${float(o['total']):,.2f} | {o['created_at'].strftime('%Y-%m-%d')}\n"
 
     buttons = []
     if page > 1:
@@ -235,12 +258,12 @@ async def view_orders_callback(callback_query: types.CallbackQuery, pool):
         buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"view_orders:{page+1}"))
 
     nav = [buttons] if buttons else []
-    nav.append([types.InlineKeyboardButton("⬅️ Back", callback_data="user_settings")])
+    nav.append([types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")])
     markup = types.InlineKeyboardMarkup(inline_keyboard=nav)
     await callback_query.message.answer(text, reply_markup=markup)
 
 # ------------------------------------------------
-# Profile Editing Logic
+# Edit Profile + Update Handler
 # ------------------------------------------------
 pending_updates = {}
 
@@ -253,7 +276,7 @@ async def edit_profile_menu(callback_query: types.CallbackQuery):
         [types.InlineKeyboardButton("📧 Email", callback_data="edit_field:email")],
         [types.InlineKeyboardButton("🏙️ City", callback_data="edit_field:city")],
         [types.InlineKeyboardButton("🌐 Language", callback_data="edit_field:language")],
-        [types.InlineKeyboardButton("⬅️ Back", callback_data="user_settings")]
+        [types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(text, reply_markup=markup)
@@ -280,10 +303,10 @@ async def update_field_handler(message: types.Message, pool):
     del pending_updates[user_id]
     buttons = [[types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(f"✅ Your {field} has been updated.", reply_markup=markup)
+    await message.answer(f"✅ Your {field} has been updated successfully.", reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: Spending Analytics
+# Spending Analytics
 # ------------------------------------------------
 @dp.callback_query(F.data == "view_stats")
 async def view_stats_callback(callback_query: types.CallbackQuery, pool):
@@ -309,7 +332,7 @@ async def view_stats_callback(callback_query: types.CallbackQuery, pool):
     else:
         text += "No shop data yet.\n"
 
-    buttons = [[types.InlineKeyboardButton("⬅️ Back", callback_data="user_settings")]]
+    buttons = [[types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(text, reply_markup=markup)
 
