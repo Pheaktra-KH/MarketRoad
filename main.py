@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 
 # ------------------------------------------------
-# Setup logging and load environment variables
+# Setup logging and environment
 # ------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -21,18 +21,21 @@ TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
 # ------------------------------------------------
-# Initialize bot and database
+# Initialize bot and dispatcher
 # ------------------------------------------------
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# ------------------------------------------------
+# Database Connection
+# ------------------------------------------------
 async def init_db():
     pool = await asyncpg.create_pool(DATABASE_URL)
-    logging.info("✅ Connected to Railway PostgreSQL database")
+    logging.info("✅ Connected to PostgreSQL Database")
     return pool
 
 # ------------------------------------------------
-# Helper functions
+# Helper Functions
 # ------------------------------------------------
 async def upsert_user(pool, user: types.User):
     async with pool.acquire() as conn:
@@ -49,7 +52,8 @@ async def upsert_user(pool, user: types.User):
                 raw = EXCLUDED.raw,
                 updated_at = NOW();
             ''',
-            user.id, user.first_name, user.last_name, user.username, getattr(user, "language_code", "unknown"), user.model_dump_json()
+            user.id, user.first_name, user.last_name, user.username,
+            getattr(user, "language_code", "unknown"), user.model_dump_json()
         )
 
 async def get_summary(pool):
@@ -120,6 +124,7 @@ async def cmd_start(message: types.Message, pool):
 @dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
     await callback_query.answer()
+
     shop_menu_text = (
         "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
         "Here are some things you can do:\n"
@@ -131,17 +136,17 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
         "Select an option below to begin 👇"
     )
     buttons = [
-        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
-        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
-        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
-        [types.InlineKeyboardButton(text="⚙️ User Dashboard", callback_data="user_settings")],
-        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
+        [types.InlineKeyboardButton("🏬 Browse Shops", callback_data="browse_shops")],
+        [types.InlineKeyboardButton("🔍 Search Products", callback_data="search_products")],
+        [types.InlineKeyboardButton("💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton("⚙️ User Dashboard", callback_data="user_settings")],
+        [types.InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(shop_menu_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Back to Home
+# Callback: Back to Home Menu
 # ------------------------------------------------
 @dp.callback_query(F.data == "back_home")
 async def back_home_callback(callback_query: types.CallbackQuery, pool):
@@ -155,74 +160,82 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
         "You can explore more below 👇"
     )
+
     channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
     group_link = normalize_tg_link(TELEGRAM_GROUP_ID)
     buttons = []
     row = []
     if channel_link:
-        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+        row.append(types.InlineKeyboardButton("📢 Channel", url=channel_link))
     if group_link:
-        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+        row.append(types.InlineKeyboardButton("💬 Group", url=group_link))
     if row:
         buttons.append(row)
-    buttons.append([types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")])
+    buttons.append([types.InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(summary_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Advanced User Dashboard
+# User Dashboard (Advanced)
 # ------------------------------------------------
 pending_updates = {}
 
 @dp.callback_query(F.data == "user_settings")
 async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user = callback_query.from_user
+    try:
+        await callback_query.answer()
+        user = callback_query.from_user
 
-    async with pool.acquire() as conn:
-        user_info = await conn.fetchrow("SELECT first_name, last_name, username, email, phone, country, city, status, created_at FROM users WHERE telegram_id=$1;", user.id)
-        order_stats = await conn.fetchrow("SELECT COUNT(*) AS total_orders, COALESCE(SUM(total),0) AS total_spent FROM orders WHERE user_id=$1;", user.id)
-        recent_orders = await conn.fetch("SELECT o.id,o.total,o.created_at,p.name AS product_name,s.name AS shop_name FROM orders o LEFT JOIN products p ON o.product_id=p.id LEFT JOIN shops s ON p.shop_id=s.id WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT 3;", user.id)
-        user_shop = await conn.fetchval("SELECT name FROM shops WHERE owner_id=$1 LIMIT 1;", user.id)
+        async with pool.acquire() as conn:
+            user_info = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1;", user.id)
+            order_stats = await conn.fetchrow("SELECT COUNT(*) AS total_orders, COALESCE(SUM(total),0) AS total_spent, COALESCE(AVG(total),0) AS avg_value FROM orders WHERE user_id=$1;", user.id)
+            recent_orders = await conn.fetch("SELECT o.id,o.total,o.created_at,p.name AS product_name,s.name AS shop_name FROM orders o LEFT JOIN products p ON o.product_id=p.id LEFT JOIN shops s ON p.shop_id=s.id WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT 3;", user.id)
+            user_shop = await conn.fetchval("SELECT name FROM shops WHERE owner_id=$1 LIMIT 1;", user.id)
 
-    if not user_info:
-        await callback_query.message.answer("⚙️ No user data found. Please use /start again.")
-        return
+        if not user_info:
+            await callback_query.message.answer("⚙️ No user profile found. Please /start again.")
+            return
 
-    full_name = f"{user_info['first_name'] or ''} {user_info['last_name'] or ''}".strip()
-    text = (
-        f"👤 <b>User Dashboard</b>\n\n"
-        f"🧑 Name: {full_name or 'N/A'}\n"
-        f"💬 Username: @{user_info['username'] or 'N/A'}\n"
-        f"📧 Email: {user_info['email'] or '-'}\n"
-        f"📞 Phone: {user_info['phone'] or '-'}\n"
-        f"🌍 Location: {user_info['city'] or '-'}, {user_info['country'] or '-'}\n"
-        f"📅 Joined: {user_info['created_at'].strftime('%Y-%m-%d') if user_info['created_at'] else '-'}\n"
-        f"🔖 Status: {user_info['status'] or 'active'}\n"
-    )
+        name = f"{user_info['first_name'] or ''} {user_info['last_name'] or ''}".strip()
+        text = (
+            f"👤 <b>User Dashboard</b>\n\n"
+            f"🧑 Name: {name or 'N/A'}\n"
+            f"💬 Username: @{user_info['username'] or 'N/A'}\n"
+            f"📧 Email: {user_info.get('email','-')}\n"
+            f"📞 Phone: {user_info.get('phone','-')}\n"
+            f"🌍 Location: {user_info.get('city','-')}, {user_info.get('country','-')}\n"
+            f"📅 Joined: {(user_info['created_at'].strftime('%Y-%m-%d') if user_info['created_at'] else '-')}\n"
+            f"🔖 Status: {user_info.get('status','active')}\n"
+        )
 
-    total_orders = order_stats['total_orders'] if order_stats else 0
-    total_spent = order_stats['total_spent'] if order_stats else 0
-    text += f"\n📦 <b>Order Summary</b>\n🧾 Total Orders: {total_orders}\n💰 Total Spent: ${float(total_spent):,.2f}\n"
+        text += (
+            f"\n📦 <b>Order Summary</b>\n"
+            f"🧾 Total Orders: {order_stats['total_orders']}\n"
+            f"💰 Total Spent: ${float(order_stats['total_spent']):,.2f}\n"
+            f"📈 Avg Order: ${float(order_stats['avg_value']):,.2f}\n"
+        )
 
-    if recent_orders:
-        text += "\n🕓 <b>Recent Orders</b>\n"
-        for o in recent_orders:
-            text += f"• {o['product_name']} from {o['shop_name']} — ${float(o['total']):,.2f} ({o['created_at'].strftime('%Y-%m-%d')})\n"
-    else:
-        text += "\n🕓 No recent orders yet.\n"
+        if recent_orders:
+            text += "\n🕓 <b>Recent Orders</b>\n"
+            for o in recent_orders:
+                text += f"• {o['product_name']} ({o['shop_name']}) — ${float(o['total']):,.2f} | {o['created_at'].strftime('%Y-%m-%d')}\n"
+        else:
+            text += "\n🕓 No recent orders yet.\n"
 
-    if user_shop:
-        text += f"\n🏪 Your Shop: {user_shop}\n"
+        if user_shop:
+            text += f"\n🏪 Your Shop: {user_shop}\n"
 
-    buttons = [
-        [types.InlineKeyboardButton("🧾 View All Orders", callback_data="view_orders")],
-        [types.InlineKeyboardButton("📊 View Spending Stats", callback_data="view_stats")],
-        [types.InlineKeyboardButton("✏️ Edit Profile", callback_data="edit_profile")],
-        [types.InlineKeyboardButton("⬅️ Back to Shop Menu", callback_data="start_shopping")]
-    ]
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(text, reply_markup=markup)
+        buttons = [
+            [types.InlineKeyboardButton("🧾 View All Orders", callback_data="view_orders")],
+            [types.InlineKeyboardButton("📊 View Spending Stats", callback_data="view_stats")],
+            [types.InlineKeyboardButton("✏️ Edit Profile", callback_data="edit_profile")],
+            [types.InlineKeyboardButton("⬅️ Back to Shop Menu", callback_data="start_shopping")]
+        ]
+        markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback_query.message.answer(text, reply_markup=markup)
+    except Exception as e:
+        logging.error(f"Dashboard error: {e}")
+        await callback_query.message.answer("⚠️ Sorry, something went wrong while loading your dashboard.")
 
 # ------------------------------------------------
 # Spending Analytics
@@ -231,9 +244,11 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
 async def view_stats_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
     user_id = callback_query.from_user.id
+
     async with pool.acquire() as conn:
         stats = await conn.fetchrow("SELECT COUNT(*) AS total_orders, COALESCE(SUM(total),0) AS total_spent, COALESCE(AVG(total),0) AS avg_value FROM orders WHERE user_id=$1;", user_id)
         top_shops = await conn.fetch("SELECT s.name, SUM(o.total) AS spent FROM orders o JOIN products p ON o.product_id=p.id JOIN shops s ON p.shop_id=s.id WHERE o.user_id=$1 GROUP BY s.name ORDER BY spent DESC LIMIT 3;", user_id)
+
     text = (
         f"📊 <b>Spending Analytics</b>\n\n"
         f"🧾 Total Orders: {stats['total_orders']}\n"
@@ -247,46 +262,13 @@ async def view_stats_callback(callback_query: types.CallbackQuery, pool):
             text += f"{shop['name']:<15} {bar} ${float(shop['spent']):,.2f}\n"
     else:
         text += "No shop data yet.\n"
+
     buttons = [[types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(text, reply_markup=markup)
 
 # ------------------------------------------------
-# View Orders (Paginated)
-# ------------------------------------------------
-@dp.callback_query(F.data.startswith("view_orders"))
-async def view_orders_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user_id = callback_query.from_user.id
-    parts = callback_query.data.split(":")
-    page = int(parts[1]) if len(parts) > 1 else 1
-    limit, offset = 5, (page - 1) * 5
-
-    async with pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM orders WHERE user_id=$1;", user_id)
-        orders = await conn.fetch("SELECT o.id,o.total,o.created_at,p.name AS product_name,s.name AS shop_name FROM orders o LEFT JOIN products p ON o.product_id=p.id LEFT JOIN shops s ON p.shop_id=s.id WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT $2 OFFSET $3;", user_id, limit, offset)
-
-    if not orders:
-        await callback_query.message.answer("🧾 You don’t have any orders yet.")
-        return
-
-    pages = (total + limit - 1) // limit
-    text = "<b>🧾 Your Orders</b>\n\n"
-    for o in orders:
-        text += f"• {o['product_name']} ({o['shop_name']}) — ${float(o['total']):,.2f} | {o['created_at'].strftime('%Y-%m-%d')}\n"
-
-    buttons = []
-    if page > 1:
-        buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"view_orders:{page-1}"))
-    if page < pages:
-        buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"view_orders:{page+1}"))
-    nav = [buttons] if buttons else []
-    nav.append([types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")])
-    markup = types.InlineKeyboardMarkup(inline_keyboard=nav)
-    await callback_query.message.answer(text, reply_markup=markup)
-
-# ------------------------------------------------
-# Edit Profile Menu and Update
+# Profile Editing
 # ------------------------------------------------
 @dp.callback_query(F.data == "edit_profile")
 async def edit_profile_menu(callback_query: types.CallbackQuery):
@@ -322,8 +304,7 @@ async def update_field_handler(message: types.Message, pool):
         await conn.execute(f"UPDATE users SET {field}=$1, updated_at=NOW() WHERE telegram_id=$2;", new_value, user_id)
 
     del pending_updates[user_id]
-    buttons = [[types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]]
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    markup = types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")]])
     await message.answer(f"✅ Your {field} has been updated successfully.", reply_markup=markup)
 
 # ------------------------------------------------
