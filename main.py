@@ -103,6 +103,19 @@ def normalize_tg_link(value: str | None) -> str | None:
 
 
 # ------------------------------------------------
+# Reply keyboard (persistent main buttons above the typing field)
+# ------------------------------------------------
+def get_main_reply_keyboard() -> types.ReplyKeyboardMarkup:
+    """
+    Returns a ReplyKeyboardMarkup that appears on top of the message input,
+    giving quick access to main actions like Start Shopping and Settings.
+    """
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.add(types.KeyboardButton("🛒 Start Shopping"), types.KeyboardButton("⚙️ Settings"))
+    return kb
+
+
+# ------------------------------------------------
 # /start command
 # ------------------------------------------------
 @dp.message(Command("start"))
@@ -161,6 +174,9 @@ async def cmd_start(message: types.Message, pool):
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
+    # Send persistent reply keyboard so "Settings" appears on top of the typing field
+    await message.answer("Quick actions:", reply_markup=get_main_reply_keyboard())
+
 
 # ------------------------------------------------
 # /settings command to open user settings directly
@@ -170,6 +186,40 @@ async def cmd_settings(message: types.Message, pool):
     """Allow users to open their settings directly with /settings."""
     # Reuse the same behaviour as clicking the 'Settings' button
     await user_dashboard_show(message.from_user, message, pool)
+
+
+# ------------------------------------------------
+# Handle main reply keyboard presses (text messages)
+# ------------------------------------------------
+@dp.message(F.text == "⚙️ Settings")
+async def settings_keyboard_handler(message: types.Message, pool):
+    """User pressed the persistent 'Settings' reply keyboard button."""
+    await user_dashboard_show(message.from_user, message, pool)
+
+
+@dp.message(F.text == "🛒 Start Shopping")
+async def start_shopping_text_handler(message: types.Message):
+    """User pressed the persistent 'Start Shopping' reply keyboard button."""
+    shop_menu_text = (
+        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
+        "Here are some things you can do:\n"
+        "• 🏬 Browse all shops\n"
+        "• 🔍 Search for products\n"
+        "• 💰 Check today’s best deals\n"
+        "• 🧾 View your orders\n\n"
+        "Select an option below to begin 👇"
+    )
+
+    # Add placeholder buttons for now (include Settings here as navigation)
+    buttons = [
+        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
+        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
+        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
+    ]
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(shop_menu_text, reply_markup=markup)
 
 
 # ------------------------------------------------
