@@ -6,12 +6,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
-from aiogram.types import (
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 # ------------------------------------------------
@@ -77,18 +72,6 @@ async def get_summary(pool):
 
 
 # ------------------------------------------------
-# Persistent keyboard (bottom of chat)
-# ------------------------------------------------
-main_menu_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="📊 User Dashboard")],
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False,
-)
-
-
-# ------------------------------------------------
 # /start Command — Home Menu
 # ------------------------------------------------
 @dp.message(Command("start"))
@@ -102,7 +85,7 @@ async def cmd_start(message: types.Message, pool):
         "We're glad to have you here.\n"
         "Explore shops, discover new products, and enjoy your shopping experience!"
     )
-    await message.answer(welcome_text, reply_markup=main_menu_keyboard)
+    await message.answer(welcome_text)
 
     # Summary
     shops, products, users, today_orders = await get_summary(pool)
@@ -121,25 +104,31 @@ async def cmd_start(message: types.Message, pool):
         buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
     if TELEGRAM_GROUP_ID:
         buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
+    buttons.append([
+        InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")
+    ])
+    buttons.append([
+        InlineKeyboardButton("📊 User Dashboard", callback_data="user_dashboard")
+    ])
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
 
 # ------------------------------------------------
-# User Dashboard (from reply keyboard)
+# User Dashboard
 # ------------------------------------------------
-@dp.message(F.text == "📊 User Dashboard")
-async def user_dashboard_message(message: types.Message):
-    user = message.from_user
+@dp.callback_query(F.data == "user_dashboard")
+async def user_dashboard_callback(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    user = callback_query.from_user
 
     dashboard_text = (
         f"📊 <b>User Dashboard</b>\n\n"
         f"👋 Hello, <b>{user.first_name or 'friend'}</b>!\n\n"
         "Manage your account and shop here:\n"
         "• Create or view your shop\n"
-        "• Update information\n"
+        "• Update your information\n"
         "• Submit for approval\n\n"
         "Choose an option below 👇"
     )
@@ -149,9 +138,8 @@ async def user_dashboard_message(message: types.Message):
         [InlineKeyboardButton("📋 View My Shop", callback_data="view_shop")],
         [InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")],
     ]
-
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(dashboard_text, reply_markup=markup)
+    await callback_query.message.answer(dashboard_text, reply_markup=markup)
 
 
 # ------------------------------------------------
@@ -236,7 +224,12 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
         buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
     if TELEGRAM_GROUP_ID:
         buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
+    buttons.append([
+        InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")
+    ])
+    buttons.append([
+        InlineKeyboardButton("📊 User Dashboard", callback_data="user_dashboard")
+    ])
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(summary_text, reply_markup=markup)
