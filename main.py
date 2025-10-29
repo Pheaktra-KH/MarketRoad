@@ -23,17 +23,15 @@ TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+
 # ------------------------------------------------
-# Database connection
+# Database
 # ------------------------------------------------
 async def init_db():
-    try:
-        pool = await asyncpg.create_pool(DATABASE_URL)
-        logging.info("✅ Connected to Railway PostgreSQL database")
-        return pool
-    except Exception as e:
-        logging.error(f"❌ Database connection failed: {e}")
-        raise
+    pool = await asyncpg.create_pool(DATABASE_URL)
+    logging.info("✅ Connected to Railway PostgreSQL database")
+    return pool
+
 
 # ------------------------------------------------
 # Helper functions
@@ -61,27 +59,31 @@ async def upsert_user(pool, user: types.User):
             user.model_dump_json(),
         )
 
+
 async def get_summary(pool):
     async with pool.acquire() as conn:
         shops = await conn.fetchval("SELECT COUNT(*) FROM shops;")
         users = await conn.fetchval("SELECT COUNT(*) FROM users;")
-        products_table = await conn.fetchval("SELECT to_regclass('products')")
-        orders_table = await conn.fetchval("SELECT to_regclass('orders')")
-        products = await conn.fetchval("SELECT COUNT(*) FROM products;") if products_table else 0
+        has_products = await conn.fetchval("SELECT to_regclass('products');")
+        has_orders = await conn.fetchval("SELECT to_regclass('orders');")
+
+        products = await conn.fetchval("SELECT COUNT(*) FROM products;") if has_products else 0
         orders_today = await conn.fetchval(
             "SELECT COUNT(*) FROM orders WHERE created_at::date = CURRENT_DATE;"
-        ) if orders_table else 0
+        ) if has_orders else 0
+
     return shops, products, users, orders_today
 
+
 # ------------------------------------------------
-# /start Command — Home Menu
+# /start Command
 # ------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, pool):
     user = message.from_user
     await upsert_user(pool, user)
 
-    # 1️⃣ Welcome
+    # Welcome
     welcome_text = (
         f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\n"
         "We're glad to have you here.\n"
@@ -89,93 +91,31 @@ async def cmd_start(message: types.Message, pool):
     )
     await message.answer(welcome_text)
 
-    # 2️⃣ Summary
+    # Summary
     shops, products, users, today_orders = await get_summary(pool)
     summary_text = (
-        f"🏠 <b>Home Menu</b>\n\n"
-        f"🏬 Shops: <b>{shops}</b>\n"
+        f"📊 <b>Today's Summary</b>\n\n"
+        f"🏬 Total Shops: <b>{shops}</b>\n"
         f"🛍️ Products: <b>{products}</b>\n"
         f"👥 Users: <b>{users}</b>\n"
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        "You can explore more below 👇"
+        "Stay connected or start exploring below 👇"
     )
 
-    # 3️⃣ Inline buttons
     buttons = []
+
     if TELEGRAM_CHANNEL_ID:
         buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
     if TELEGRAM_GROUP_ID:
         buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([
-        InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")
-    ])
-    buttons.append([
-        InlineKeyboardButton("📊 User Dashboard", callback_data="user_dashboard")
-    ])
+    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
-# ------------------------------------------------
-# User Dashboard
-# ------------------------------------------------
-@dp.callback_query(F.data == "user_dashboard")
-async def user_dashboard_callback(callback_query: types.CallbackQuery):
-    await callback_query.answer()
-    user = callback_query.from_user
-
-    dashboard_text = (
-        f"📊 <b>User Dashboard</b>\n\n"
-        f"👋 Hello, <b>{user.first_name or 'friend'}</b>!\n\n"
-        "Manage your account and shop here:\n"
-        "• Create or view your shop\n"
-        "• Update your information\n"
-        "• Submit for approval\n\n"
-        "Choose an option below 👇"
-    )
-
-    buttons = [
-        [InlineKeyboardButton("🏬 Create My Shop", callback_data="create_shop")],
-        [InlineKeyboardButton("📋 View My Shop", callback_data="view_shop")],
-        [InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")],
-    ]
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(dashboard_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Create Shop (basic)
-# ------------------------------------------------
-@dp.callback_query(F.data == "create_shop")
-async def create_shop_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user_id = callback_query.from_user.id
-
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval("SELECT id FROM shops WHERE owner_id = $1;", user_id)
-        if exists:
-            await callback_query.message.answer(
-                "⚠️ You already have a shop. Use 'Edit My Shop' to update it."
-            )
-            return
-
-    await callback_query.message.answer("🏬 Please send your shop name:")
-
-    @dp.message(F.text)
-    async def receive_shop_name(message: types.Message):
-        shop_name = message.text.strip()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO shops (name, owner_id, created_at) VALUES ($1, $2, NOW());",
-                shop_name,
-                user_id,
-            )
-        await message.answer(
-            f"✅ Shop '<b>{shop_name}</b>' created successfully!",
-            parse_mode="HTML",
-        )
-
-# ------------------------------------------------
-# Start Shopping
+# Start Shopping (Shop Menu)
 # ------------------------------------------------
 @dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
@@ -197,8 +137,10 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
         [InlineKeyboardButton("💰 Best Deals", callback_data="best_deals")],
         [InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")],
     ]
+
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(shop_menu_text, parse_mode="HTML", reply_markup=markup)
+    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
+
 
 # ------------------------------------------------
 # Back to Home
@@ -206,6 +148,7 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
 @dp.callback_query(F.data == "back_home")
 async def back_home_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
+
     shops, products, users, today_orders = await get_summary(pool)
     summary_text = (
         f"🏠 <b>Home Menu</b>\n\n"
@@ -221,15 +164,11 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
         buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
     if TELEGRAM_GROUP_ID:
         buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([
-        InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")
-    ])
-    buttons.append([
-        InlineKeyboardButton("📊 User Dashboard", callback_data="user_dashboard")
-    ])
+    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(summary_text, reply_markup=markup)
+
 
 # ------------------------------------------------
 # Run Bot
@@ -238,7 +177,7 @@ async def main():
     pool = await init_db()
     dp["pool"] = pool
 
-    # Middleware to inject DB pool into all handlers
+    # Inject DB connection into handlers
     @dp.update.middleware
     async def db_middleware(handler, event, data):
         data["pool"] = pool
@@ -246,6 +185,7 @@ async def main():
 
     logging.info("🤖 Bot started polling...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     try:
