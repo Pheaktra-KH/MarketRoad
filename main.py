@@ -6,11 +6,11 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+from datetime import datetime
 
 # ------------------------------------------------
-# Setup logging and environment
+# Setup logging and load environment variables
 # ------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -20,14 +20,20 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
+print("DEBUG ENV CHECK:")
+print("BOT_TOKEN:", bool(BOT_TOKEN))
+print("CHANNEL:", TELEGRAM_CHANNEL_ID)
+print("GROUP:", TELEGRAM_GROUP_ID)
+
+# ------------------------------------------------
+# Initialize bot and database
+# ------------------------------------------------
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 
-# ------------------------------------------------
-# Database
-# ------------------------------------------------
 async def init_db():
+    """Initialize a PostgreSQL connection pool."""
     pool = await asyncpg.create_pool(DATABASE_URL)
     logging.info("✅ Connected to Railway PostgreSQL database")
     return pool
@@ -37,6 +43,7 @@ async def init_db():
 # Helper functions
 # ------------------------------------------------
 async def upsert_user(pool, user: types.User):
+    """Insert or update Telegram user information."""
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -61,29 +68,48 @@ async def upsert_user(pool, user: types.User):
 
 
 async def get_summary(pool):
+    """Fetch total counts from key tables."""
     async with pool.acquire() as conn:
-        shops = await conn.fetchval("SELECT COUNT(*) FROM shops;")
-        users = await conn.fetchval("SELECT COUNT(*) FROM users;")
-        has_products = await conn.fetchval("SELECT to_regclass('products');")
-        has_orders = await conn.fetchval("SELECT to_regclass('orders');")
+        shop_count = await conn.fetchval("SELECT COUNT(*) FROM shops;") if await conn.fetchval("SELECT to_regclass('shops')") else 0
+        product_count = await conn.fetchval("SELECT COUNT(*) FROM products;") if await conn.fetchval("SELECT to_regclass('products')") else 0
+        user_count = await conn.fetchval("SELECT COUNT(*) FROM users;") if await conn.fetchval("SELECT to_regclass('users')") else 0
+        order_count = await conn.fetchval("""
+            SELECT COUNT(*) FROM orders
+            WHERE created_at::date = CURRENT_DATE;
+        """) if await conn.fetchval("SELECT to_regclass('orders')") else 0
 
-        products = await conn.fetchval("SELECT COUNT(*) FROM products;") if has_products else 0
-        orders_today = await conn.fetchval(
-            "SELECT COUNT(*) FROM orders WHERE created_at::date = CURRENT_DATE;"
-        ) if has_orders else 0
-
-    return shops, products, users, orders_today
+    return shop_count, product_count, user_count, order_count
 
 
 # ------------------------------------------------
-# /start Command
+# Utility: normalize Telegram links
+# ------------------------------------------------
+def normalize_tg_link(value: str | None) -> str | None:
+    """
+    Accepts: '@username', 'https://t.me/username', '-1001234567890'
+    Returns a usable https URL or None.
+    """
+    if not value:
+        return None
+    v = value.strip()
+    if v.startswith("http://") or v.startswith("https://"):
+        return v
+    if v.startswith("@"):
+        return f"https://t.me/{v[1:]}"
+    if v.startswith("-100"):
+        return None  # Can't convert safely to link
+    return f"https://t.me/{v}"
+
+
+# ------------------------------------------------
+# /start command
 # ------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, pool):
     user = message.from_user
     await upsert_user(pool, user)
 
-    # Welcome
+    # --- First message: welcome ---
     welcome_text = (
         f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\n"
         "We're glad to have you here.\n"
@@ -91,8 +117,9 @@ async def cmd_start(message: types.Message, pool):
     )
     await message.answer(welcome_text)
 
-    # Summary
+    # --- Fetch summary ---
     shops, products, users, today_orders = await get_summary(pool)
+
     summary_text = (
         f"📊 <b>Today's Summary</b>\n\n"
         f"🏬 Total Shops: <b>{shops}</b>\n"
@@ -102,88 +129,61 @@ async def cmd_start(message: types.Message, pool):
         "Stay connected or start exploring below 👇"
     )
 
+    # --- Build Buttons ---
+    channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
+    group_link = normalize_tg_link(TELEGRAM_GROUP_ID)
+
+    print("[DEBUG LINKS]")
+    print("Raw channel:", TELEGRAM_CHANNEL_ID)
+    print("Raw group:", TELEGRAM_GROUP_ID)
+    print("Parsed channel link:", channel_link)
+    print("Parsed group link:", group_link)
+
     buttons = []
 
-    if TELEGRAM_CHANNEL_ID:
-        buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
-    if TELEGRAM_GROUP_ID:
-        buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
+    # Channel and Group on same row if available
+    row = []
+    if channel_link:
+        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+    if group_link:
+        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+    if row:
+        buttons.append(row)
 
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    # Always add Start Shopping button
+    buttons.append([
+        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
+    ])
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
 
 # ------------------------------------------------
-# Start Shopping (Shop Menu)
+# Callback for "Start Shopping"
 # ------------------------------------------------
 @dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
     await callback_query.answer()
-
-    shop_menu_text = (
-        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
-        "Here are some things you can do:\n"
-        "• 🏬 Browse all shops\n"
-        "• 🔍 Search for products\n"
-        "• 💰 Check today’s best deals\n"
-        "• 📦 View your orders\n\n"
-        "Select an option below to begin 👇"
+    await callback_query.message.answer(
+        "🛍️ Great! Let's start shopping.\n\n"
+        "You can browse shops, search for products, or check today’s best deals."
     )
 
-    buttons = [
-        [InlineKeyboardButton("🏬 Browse Shops", callback_data="browse_shops")],
-        [InlineKeyboardButton("🔍 Search Products", callback_data="search_products")],
-        [InlineKeyboardButton("💰 Best Deals", callback_data="best_deals")],
-        [InlineKeyboardButton("⬅️ Back to Home", callback_data="back_home")],
-    ]
-
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
-
 
 # ------------------------------------------------
-# Back to Home
-# ------------------------------------------------
-@dp.callback_query(F.data == "back_home")
-async def back_home_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-
-    shops, products, users, today_orders = await get_summary(pool)
-    summary_text = (
-        f"🏠 <b>Home Menu</b>\n\n"
-        f"🏬 Shops: <b>{shops}</b>\n"
-        f"🛍️ Products: <b>{products}</b>\n"
-        f"👥 Users: <b>{users}</b>\n"
-        f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        "You can explore more below 👇"
-    )
-
-    buttons = []
-    if TELEGRAM_CHANNEL_ID:
-        buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
-    if TELEGRAM_GROUP_ID:
-        buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
-    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
-
-    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(summary_text, reply_markup=markup)
-
-
-# ------------------------------------------------
-# Run Bot
+# Run bot
 # ------------------------------------------------
 async def main():
     pool = await init_db()
     dp["pool"] = pool
 
-    # Inject DB connection into handlers
+    # Middleware to inject pool into handlers
     @dp.update.middleware
     async def db_middleware(handler, event, data):
         data["pool"] = pool
         return await handler(event, data)
 
-    logging.info("🤖 Bot started polling...")
     await dp.start_polling(bot)
 
 
