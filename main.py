@@ -1,3 +1,4 @@
+ url=https://github.com/Pheaktra-KH/MarketRoad/blob/6c20f74898d9dc85cc93f6bfe87d885381bc9aae/main.py
 import os
 import asyncio
 import logging
@@ -150,89 +151,35 @@ async def cmd_start(message: types.Message, pool):
     if row:
         buttons.append(row)
 
-    # Always add Start Shopping button
-    buttons.append([
-        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
-    ])
+    # Main actions row: Start Shopping + Settings
+    main_row = [
+        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping"),
+        types.InlineKeyboardButton(text="⚙️ Settings", callback_data="user_settings")
+    ]
+    buttons.append(main_row)
 
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
 
 
 # ------------------------------------------------
-# Callback for "Start Shopping"
+# /settings command to open user settings directly
 # ------------------------------------------------
-@dp.callback_query(F.data == "start_shopping")
-async def start_shopping_callback(callback_query: types.CallbackQuery):
-    await callback_query.answer()  # acknowledge the button press
+@dp.message(Command("settings"))
+async def cmd_settings(message: types.Message, pool):
+    """Allow users to open their settings directly with /settings."""
+    # Reuse the same behaviour as clicking the 'Settings' button
+    # Call the same logic as the callback handler by delegating
+    # We'll call the user_settings handler by constructing a fake callback_query-like object:
+    # Simpler: just call the same code path that user_settings uses (fetch & show dashboard)
+    await user_dashboard_show(message.from_user, message, pool)
 
-    shop_menu_text = (
-        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
-        "Here are some things you can do:\n"
-        "• 🏬 Browse all shops\n"
-        "• 🔍 Search for products\n"
-        "• 💰 Check today’s best deals\n"
-        "• 🧾 View your orders\n\n"
-        "Select an option below to begin 👇"
-    )
-
-    # Add placeholder buttons for now
-    buttons = [
-        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
-        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
-        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
-        [types.InlineKeyboardButton(text="⚙️ User Settings", callback_data="user_settings")],
-        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
-    ]
-
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
-
-@dp.callback_query(F.data == "back_home")
-async def back_home_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user = callback_query.from_user
-
-    shops, products, users, today_orders = await get_summary(pool)
-    summary_text = (
-        f"🏠 <b>Home Menu</b>\n\n"
-        f"🏬 Shops: <b>{shops}</b>\n"
-        f"🛍️ Products: <b>{products}</b>\n"
-        f"👥 Users: <b>{users}</b>\n"
-        f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        "You can explore more below 👇"
-    )
-
-    # Reuse same main buttons
-    channel_link = TELEGRAM_CHANNEL_ID
-    group_link = TELEGRAM_GROUP_ID
-
-    buttons = []
-    row = []
-    if channel_link:
-        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
-    if group_link:
-        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
-    if row:
-        buttons.append(row)
-
-    buttons.append([
-        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
-    ])
-
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    await callback_query.message.answer(summary_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: User Dashboard
+# Shared function to render user dashboard (used by callback and /settings)
 # ------------------------------------------------
-@dp.callback_query(F.data == "user_settings")
-async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user = callback_query.from_user
-
+async def user_dashboard_show(user: types.User, target_message: types.Message | types.CallbackQuery.message, pool):
+    # This function fetches data and sends the dashboard to target_message (which supports .answer/.reply)
     async with pool.acquire() as conn:
         # Fetch user profile info
         user_info = await conn.fetchrow("""
@@ -265,7 +212,11 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
         """, user.id)
 
     if not user_info:
-        await callback_query.message.answer("⚙️ No user data found. Please use /start again.")
+        # determine how to reply based on message type
+        if isinstance(target_message, types.Message):
+            await target_message.answer("⚙️ No user data found. Please use /start again.")
+        else:
+            await target_message.reply("⚙️ No user data found. Please use /start again.")
         return
 
     full_name = f"{user_info['first_name'] or ''} {user_info['last_name'] or ''}".strip()
@@ -312,7 +263,92 @@ async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback_query.message.answer(user_text, reply_markup=markup)
+    # send via message or callback query message
+    if isinstance(target_message, types.Message):
+        await target_message.answer(user_text, reply_markup=markup)
+    else:
+        await target_message.message.answer(user_text, reply_markup=markup)
+
+
+# ------------------------------------------------
+# Callback for "Start Shopping"
+# ------------------------------------------------
+@dp.callback_query(F.data == "start_shopping")
+async def start_shopping_callback(callback_query: types.CallbackQuery):
+    await callback_query.answer()  # acknowledge the button press
+
+    shop_menu_text = (
+        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
+        "Here are some things you can do:\n"
+        "• 🏬 Browse all shops\n"
+        "• 🔍 Search for products\n"
+        "• 💰 Check today’s best deals\n"
+        "• 🧾 View your orders\n\n"
+        "Select an option below to begin 👇"
+    )
+
+    # Add placeholder buttons for now (include Settings here as navigation)
+    buttons = [
+        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
+        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
+        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton(text="⚙️ User Settings", callback_data="user_settings")],
+        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
+    ]
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
+
+
+@dp.callback_query(F.data == "back_home")
+async def back_home_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user = callback_query.from_user
+
+    shops, products, users, today_orders = await get_summary(pool)
+    summary_text = (
+        f"🏠 <b>Home Menu</b>\n\n"
+        f"🏬 Shops: <b>{shops}</b>\n"
+        f"🛍️ Products: <b>{products}</b>\n"
+        f"👥 Users: <b>{users}</b>\n"
+        f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
+        "You can explore more below 👇"
+    )
+
+    # Reuse same main buttons with normalized links
+    channel_link = normalize_tg_link(TELEGRAM_CHANNEL_ID)
+    group_link = normalize_tg_link(TELEGRAM_GROUP_ID)
+
+    buttons = []
+    row = []
+    if channel_link:
+        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+    if group_link:
+        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+    if row:
+        buttons.append(row)
+
+    # include Start Shopping + Settings
+    buttons.append([
+        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping"),
+        types.InlineKeyboardButton(text="⚙️ Settings", callback_data="user_settings")
+    ])
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback_query.message.answer(summary_text, reply_markup=markup)
+
+
+# ------------------------------------------------
+# Callback: User Dashboard (invoked via button)
+# ------------------------------------------------
+@dp.callback_query(F.data == "user_settings")
+async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    # reuse the shared rendering function
+    await user_dashboard_show(callback_query.from_user, callback_query, pool)
+
 
 # ------------------------------------------------
 # Callback: View Orders (Paginated)
@@ -357,16 +393,20 @@ async def view_orders_callback(callback_query: types.CallbackQuery, pool):
 
     # Navigation buttons
     buttons = []
+    nav_row = []
     if page > 1:
-        buttons.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"view_orders:{page-1}"))
+        nav_row.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"view_orders:{page-1}"))
     if page < total_pages:
-        buttons.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"view_orders:{page+1}"))
+        nav_row.append(types.InlineKeyboardButton("➡️ Next", callback_data=f"view_orders:{page+1}"))
 
-    nav = [buttons] if buttons else []
-    nav.append([types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")])
+    if nav_row:
+        buttons.append(nav_row)
 
-    markup = types.InlineKeyboardMarkup(inline_keyboard=nav)
+    buttons.append([types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")])
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(text, reply_markup=markup)
+
 
 # ------------------------------------------------
 # Callback: Edit Profile Menu
@@ -389,6 +429,48 @@ async def edit_profile_menu(callback_query: types.CallbackQuery):
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(text, reply_markup=markup)
+
+
+# ------------------------------------------------
+# Callback: Handle edit_field:<field> to initiate an update
+# ------------------------------------------------
+@dp.callback_query(F.data.startswith("edit_field:"))
+async def edit_field_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    parts = callback_query.data.split(":", 1)
+    if len(parts) != 2:
+        await callback_query.message.answer("⚠️ Invalid edit request.")
+        return
+
+    field = parts[1]
+    valid_fields = ["phone", "email", "city", "language"]
+    if field not in valid_fields:
+        await callback_query.message.answer("⚠️ You cannot edit that field via this bot.")
+        return
+
+    user_id = callback_query.from_user.id
+    # Store pending field on dispatcher (consistent with dp["pool"] usage).
+    # This is a simple approach; in production use per-user storage or a DB-backed state.
+    dp["pending_field"] = (user_id, field)
+
+    # Prompt user to send the new value
+    prompt = f"✏️ Please send your new {field} now. To cancel, send /cancel."
+    await callback_query.message.answer(prompt)
+
+
+# ------------------------------------------------
+# /cancel command to abort pending edits
+# ------------------------------------------------
+@dp.message(Command("cancel"))
+async def cancel_pending(message: types.Message):
+    if "pending_field" in dp:
+        stored_user_id, _ = dp["pending_field"]
+        if stored_user_id == message.from_user.id:
+            del dp["pending_field"]
+            await message.answer("✅ Edit cancelled.")
+            return
+    await message.answer("ℹ️ Nothing to cancel.")
+
 
 # ------------------------------------------------
 # Message Handler: Update Field
