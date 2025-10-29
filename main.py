@@ -15,7 +15,7 @@ from aiogram.types import (
 from dotenv import load_dotenv
 
 # ------------------------------------------------
-# Setup logging and load environment variables
+# Setup logging and environment
 # ------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -25,15 +25,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 TELEGRAM_GROUP_ID = os.getenv("TELEGRAM_GROUP_ID")
 
-# ------------------------------------------------
-# Initialize bot and database
-# ------------------------------------------------
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 
+# ------------------------------------------------
+# Database connection
+# ------------------------------------------------
 async def init_db():
-    """Initialize PostgreSQL connection pool"""
     pool = await asyncpg.create_pool(DATABASE_URL)
     logging.info("✅ Connected to Railway PostgreSQL database")
     return pool
@@ -69,8 +68,8 @@ async def upsert_user(pool, user: types.User):
 async def get_summary(pool):
     async with pool.acquire() as conn:
         shops = await conn.fetchval("SELECT COUNT(*) FROM shops;")
-        products = await conn.fetchval("SELECT COUNT(*) FROM products;") if await conn.fetchval("SELECT to_regclass('products')") else 0
         users = await conn.fetchval("SELECT COUNT(*) FROM users;")
+        products = await conn.fetchval("SELECT COUNT(*) FROM products;") if await conn.fetchval("SELECT to_regclass('products')") else 0
         orders_today = await conn.fetchval(
             "SELECT COUNT(*) FROM orders WHERE created_at::date = CURRENT_DATE;"
         ) if await conn.fetchval("SELECT to_regclass('orders')") else 0
@@ -78,26 +77,26 @@ async def get_summary(pool):
 
 
 # ------------------------------------------------
-# Keyboards
+# Persistent keyboard (bottom of chat)
 # ------------------------------------------------
-# Persistent reply keyboard (bottom of chat)
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 User Dashboard")],
-        [KeyboardButton(text="📍 Share Location", request_location=True)],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
 
+
 # ------------------------------------------------
-# /start command
+# /start Command — Home Menu
 # ------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, pool):
     user = message.from_user
     await upsert_user(pool, user)
 
+    # Welcome
     welcome_text = (
         f"👋 <b>Welcome, {user.first_name or 'friend'}!</b>\n\n"
         "We're glad to have you here.\n"
@@ -105,19 +104,19 @@ async def cmd_start(message: types.Message, pool):
     )
     await message.answer(welcome_text, reply_markup=main_menu_keyboard)
 
+    # Summary
     shops, products, users, today_orders = await get_summary(pool)
     summary_text = (
-        f"📊 <b>Today's Summary</b>\n\n"
-        f"🏬 Total Shops: <b>{shops}</b>\n"
+        f"🏠 <b>Home Menu</b>\n\n"
+        f"🏬 Shops: <b>{shops}</b>\n"
         f"🛍️ Products: <b>{products}</b>\n"
         f"👥 Users: <b>{users}</b>\n"
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
-        "Stay connected or start exploring below 👇"
+        "You can explore more below 👇"
     )
 
-    # Inline buttons for channel, group, and shop
+    # Inline buttons
     buttons = []
-
     if TELEGRAM_CHANNEL_ID:
         buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
     if TELEGRAM_GROUP_ID:
@@ -126,20 +125,6 @@ async def cmd_start(message: types.Message, pool):
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
-
-
-# ------------------------------------------------
-# Handle location sharing
-# ------------------------------------------------
-@dp.message(F.location)
-async def handle_location(message: types.Message):
-    loc = message.location
-    await message.answer(
-        f"📍 Your location received!\n"
-        f"Latitude: <b>{loc.latitude}</b>\n"
-        f"Longitude: <b>{loc.longitude}</b>",
-        parse_mode="HTML",
-    )
 
 
 # ------------------------------------------------
@@ -154,8 +139,8 @@ async def user_dashboard_message(message: types.Message):
         f"👋 Hello, <b>{user.first_name or 'friend'}</b>!\n\n"
         "Manage your account and shop here:\n"
         "• Create or view your shop\n"
-        "• Update your information\n"
-        "• Submit your shop for approval\n\n"
+        "• Update information\n"
+        "• Submit for approval\n\n"
         "Choose an option below 👇"
     )
 
@@ -203,11 +188,22 @@ async def create_shop_callback(callback_query: types.CallbackQuery, pool):
 
 
 # ------------------------------------------------
-# Start Shopping
+# Start Shopping (Shop Menu)
 # ------------------------------------------------
 @dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
     await callback_query.answer()
+
+    shop_menu_text = (
+        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
+        "Here are some things you can do:\n"
+        "• 🏬 Browse all shops\n"
+        "• 🔍 Search for products\n"
+        "• 💰 Check today’s best deals\n"
+        "• 📦 View your orders\n\n"
+        "Select an option below to begin 👇"
+    )
+
     buttons = [
         [InlineKeyboardButton("🏬 Browse Shops", callback_data="browse_shops")],
         [InlineKeyboardButton("🔍 Search Products", callback_data="search_products")],
@@ -216,12 +212,7 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
     ]
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await callback_query.message.answer(
-        "🛍️ <b>Shop Menu</b>\n\n"
-        "Select an option below to begin 👇",
-        parse_mode="HTML",
-        reply_markup=markup,
-    )
+    await callback_query.message.answer(shop_menu_text, parse_mode="HTML", reply_markup=markup)
 
 
 # ------------------------------------------------
@@ -239,11 +230,14 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
         f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
         "You can explore more below 👇"
     )
-    buttons = [
-        [InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)],
-        [InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)],
-        [InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")],
-    ]
+
+    buttons = []
+    if TELEGRAM_CHANNEL_ID:
+        buttons.append([InlineKeyboardButton("📢 Channel", url=TELEGRAM_CHANNEL_ID)])
+    if TELEGRAM_GROUP_ID:
+        buttons.append([InlineKeyboardButton("💬 Group", url=TELEGRAM_GROUP_ID)])
+    buttons.append([InlineKeyboardButton("🛒 Start Shopping", callback_data="start_shopping")])
+
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(summary_text, reply_markup=markup)
 
@@ -255,7 +249,6 @@ async def main():
     pool = await init_db()
     dp["pool"] = pool
 
-    # Middleware to inject pool into handlers
     @dp.update.middleware
     async def db_middleware(handler, event, data):
         data["pool"] = pool
