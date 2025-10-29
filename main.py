@@ -290,7 +290,6 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
         [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
         [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
         [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
-        [types.InlineKeyboardButton(text="⚙️ User Settings", callback_data="user_settings")],
         [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
     ]
 
