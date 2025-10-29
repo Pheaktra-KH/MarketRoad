@@ -181,6 +181,7 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
         [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
         [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
         [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton(text="⚙️ User Settings", callback_data="user_settings")],
         [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
     ]
 
@@ -223,6 +224,42 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback_query.message.answer(summary_text, reply_markup=markup)
+
+# ------------------------------------------------
+# Callback: User Settings
+# ------------------------------------------------
+@dp.callback_query(F.data == "user_settings")
+async def user_settings_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user = callback_query.from_user
+
+    # Fetch stored user info
+    async with pool.acquire() as conn:
+        record = await conn.fetchrow(
+            "SELECT first_name, last_name, username, language_code, country, city, status, created_at "
+            "FROM users WHERE telegram_id = $1;",
+            user.id
+        )
+
+    if not record:
+        await callback_query.message.answer("⚙️ No user settings found. Please /start again.")
+        return
+
+    profile_text = (
+        f"⚙️ <b>User Settings</b>\n\n"
+        f"👤 <b>Name:</b> {record['first_name'] or ''} {record['last_name'] or ''}\n"
+        f"💬 <b>Username:</b> @{record['username'] or 'N/A'}\n"
+        f"🌐 <b>Language:</b> {record['language_code'] or 'unknown'}\n"
+        f"📍 <b>Location:</b> {record['city'] or '-'}, {record['country'] or '-'}\n"
+        f"📅 <b>Joined:</b> {record['created_at'].strftime('%Y-%m-%d') if record['created_at'] else '-'}\n"
+        f"🔖 <b>Status:</b> {record['status'] or 'active'}"
+    )
+
+    buttons = [
+        [types.InlineKeyboardButton(text="⬅️ Back to Shop Menu", callback_data="start_shopping")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback_query.message.answer(profile_text, reply_markup=markup)
 
 
 # ------------------------------------------------
