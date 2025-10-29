@@ -8,6 +8,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
 from dotenv import load_dotenv
 from datetime import datetime
+from typing import Union
 
 # ------------------------------------------------
 # Setup logging and load environment variables
@@ -168,16 +169,13 @@ async def cmd_start(message: types.Message, pool):
 async def cmd_settings(message: types.Message, pool):
     """Allow users to open their settings directly with /settings."""
     # Reuse the same behaviour as clicking the 'Settings' button
-    # Call the same logic as the callback handler by delegating
-    # We'll call the user_settings handler by constructing a fake callback_query-like object:
-    # Simpler: just call the same code path that user_settings uses (fetch & show dashboard)
     await user_dashboard_show(message.from_user, message, pool)
 
 
 # ------------------------------------------------
 # Shared function to render user dashboard (used by callback and /settings)
 # ------------------------------------------------
-async def user_dashboard_show(user: types.User, target_message: types.Message | types.CallbackQuery.message, pool):
+async def user_dashboard_show(user: types.User, target_message: Union[types.Message, types.CallbackQuery], pool):
     # This function fetches data and sends the dashboard to target_message (which supports .answer/.reply)
     async with pool.acquire() as conn:
         # Fetch user profile info
@@ -215,7 +213,8 @@ async def user_dashboard_show(user: types.User, target_message: types.Message | 
         if isinstance(target_message, types.Message):
             await target_message.answer("⚙️ No user data found. Please use /start again.")
         else:
-            await target_message.reply("⚙️ No user data found. Please use /start again.")
+            # target_message is a CallbackQuery
+            await target_message.message.reply("⚙️ No user data found. Please use /start again.")
         return
 
     full_name = f"{user_info['first_name'] or ''} {user_info['last_name'] or ''}".strip()
