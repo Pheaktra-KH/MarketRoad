@@ -226,40 +226,93 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.message.answer(summary_text, reply_markup=markup)
 
 # ------------------------------------------------
-# Callback: User Settings
+# Callback: User Dashboard
 # ------------------------------------------------
 @dp.callback_query(F.data == "user_settings")
-async def user_settings_callback(callback_query: types.CallbackQuery, pool):
+async def user_dashboard_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
     user = callback_query.from_user
 
-    # Fetch stored user info
     async with pool.acquire() as conn:
-        record = await conn.fetchrow(
-            "SELECT first_name, last_name, username, language_code, country, city, status, created_at "
-            "FROM users WHERE telegram_id = $1;",
-            user.id
-        )
+        # Fetch user profile info
+        user_info = await conn.fetchrow("""
+            SELECT first_name, last_name, username, email, phone, country, city, status, created_at
+            FROM users
+            WHERE telegram_id = $1;
+        """, user.id)
 
-    if not record:
-        await callback_query.message.answer("⚙️ No user settings found. Please /start again.")
+        # Fetch order stats
+        order_stats = await conn.fetchrow("""
+            SELECT COUNT(*) AS total_orders, COALESCE(SUM(total), 0) AS total_spent
+            FROM orders
+            WHERE user_id = $1;
+        """, user.id)
+
+        # Fetch recent orders (last 3)
+        recent_orders = await conn.fetch("""
+            SELECT o.id, o.total, o.created_at, p.name AS product_name, s.name AS shop_name
+            FROM orders o
+            LEFT JOIN products p ON o.product_id = p.id
+            LEFT JOIN shops s ON p.shop_id = s.id
+            WHERE o.user_id = $1
+            ORDER BY o.created_at DESC
+            LIMIT 3;
+        """, user.id)
+
+        # Fetch user-related shop (if owner)
+        user_shop = await conn.fetchval("""
+            SELECT name FROM shops WHERE owner_id = $1 LIMIT 1;
+        """, user.id)
+
+    if not user_info:
+        await callback_query.message.answer("⚙️ No user data found. Please use /start again.")
         return
 
-    profile_text = (
-        f"⚙️ <b>User Settings</b>\n\n"
-        f"👤 <b>Name:</b> {record['first_name'] or ''} {record['last_name'] or ''}\n"
-        f"💬 <b>Username:</b> @{record['username'] or 'N/A'}\n"
-        f"🌐 <b>Language:</b> {record['language_code'] or 'unknown'}\n"
-        f"📍 <b>Location:</b> {record['city'] or '-'}, {record['country'] or '-'}\n"
-        f"📅 <b>Joined:</b> {record['created_at'].strftime('%Y-%m-%d') if record['created_at'] else '-'}\n"
-        f"🔖 <b>Status:</b> {record['status'] or 'active'}"
+    full_name = f"{user_info['first_name'] or ''} {user_info['last_name'] or ''}".strip()
+    user_text = (
+        f"👤 <b>User Dashboard</b>\n\n"
+        f"🧑 Name: <b>{full_name or 'N/A'}</b>\n"
+        f"💬 Username: @{user_info['username'] or 'N/A'}\n"
+        f"📧 Email: {user_info['email'] or '-'}\n"
+        f"📞 Phone: {user_info['phone'] or '-'}\n"
+        f"🌍 Location: {user_info['city'] or '-'}, {user_info['country'] or '-'}\n"
+        f"📅 Joined: {user_info['created_at'].strftime('%Y-%m-%d') if user_info['created_at'] else '-'}\n"
+        f"🔖 Status: {user_info['status'] or 'active'}\n"
     )
 
+    # Add order summary
+    total_orders = order_stats['total_orders'] if order_stats else 0
+    total_spent = order_stats['total_spent'] if order_stats else 0
+    user_text += (
+        f"\n📦 <b>Order Summary</b>\n"
+        f"🧾 Total Orders: {total_orders}\n"
+        f"💰 Total Spent: ${float(total_spent):,.2f}\n"
+    )
+
+    # Add recent orders
+    if recent_orders:
+        user_text += "\n🕓 <b>Recent Orders</b>\n"
+        for order in recent_orders:
+            user_text += (
+                f"• <b>{order['product_name'] or 'Unknown'}</b> from <i>{order['shop_name'] or 'N/A'}</i>\n"
+                f"  💵 ${float(order['total']):,.2f} | 📅 {order['created_at'].strftime('%Y-%m-%d')}\n"
+            )
+    else:
+        user_text += "\n🕓 No recent orders yet.\n"
+
+    # Add shop info (if user is a shop owner)
+    if user_shop:
+        user_text += f"\n🏪 <b>Your Shop:</b> {user_shop}\n"
+
+    # Dashboard buttons
     buttons = [
+        [types.InlineKeyboardButton(text="🧾 View All Orders", callback_data="view_orders")],
+        [types.InlineKeyboardButton(text="✏️ Edit Profile", callback_data="edit_profile")],
         [types.InlineKeyboardButton(text="⬅️ Back to Shop Menu", callback_data="start_shopping")]
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback_query.message.answer(profile_text, reply_markup=markup)
+
+    await callback_query.message.answer(user_text, reply_markup=markup)
 
 
 # ------------------------------------------------
