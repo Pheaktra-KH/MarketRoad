@@ -164,11 +164,65 @@ async def cmd_start(message: types.Message, pool):
 # ------------------------------------------------
 @dp.callback_query(F.data == "start_shopping")
 async def start_shopping_callback(callback_query: types.CallbackQuery):
-    await callback_query.answer()
-    await callback_query.message.answer(
-        "🛍️ Great! Let's start shopping.\n\n"
-        "You can browse shops, search for products, or check today’s best deals."
+    await callback_query.answer()  # acknowledge the button press
+
+    shop_menu_text = (
+        "🛍️ <b>Welcome to the Shop Menu!</b>\n\n"
+        "Here are some things you can do:\n"
+        "• 🏬 Browse all shops\n"
+        "• 🔍 Search for products\n"
+        "• 💰 Check today’s best deals\n"
+        "• 🧾 View your orders\n\n"
+        "Select an option below to begin 👇"
     )
+
+    # Add placeholder buttons for now
+    buttons = [
+        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
+        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
+        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
+    ]
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback_query.message.answer(shop_menu_text, reply_markup=markup)
+
+@dp.callback_query(F.data == "back_home")
+async def back_home_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user = callback_query.from_user
+
+    shops, products, users, today_orders = await get_summary(pool)
+    summary_text = (
+        f"🏠 <b>Home Menu</b>\n\n"
+        f"🏬 Shops: <b>{shops}</b>\n"
+        f"🛍️ Products: <b>{products}</b>\n"
+        f"👥 Users: <b>{users}</b>\n"
+        f"🧾 Orders Today: <b>{today_orders}</b>\n\n"
+        "You can explore more below 👇"
+    )
+
+    # Reuse same main buttons
+    channel_link = TELEGRAM_CHANNEL_ID
+    group_link = TELEGRAM_GROUP_ID
+
+    buttons = []
+    row = []
+    if channel_link:
+        row.append(types.InlineKeyboardButton(text="📢 Channel", url=channel_link))
+    if group_link:
+        row.append(types.InlineKeyboardButton(text="💬 Group", url=group_link))
+    if row:
+        buttons.append(row)
+
+    buttons.append([
+        types.InlineKeyboardButton(text="🛒 Start Shopping", callback_data="start_shopping")
+    ])
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback_query.message.answer(summary_text, reply_markup=markup)
 
 
 # ------------------------------------------------
