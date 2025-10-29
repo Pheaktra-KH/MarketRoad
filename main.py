@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -124,7 +125,7 @@ async def cmd_start(message: types.Message, pool):
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(summary_text, reply_markup=markup)
-
+    await message.answer("🛍️ You can use the menu below anytime 👇", reply_markup=main_keyboard)
 
 # ------------------------------------------------
 # Start Shopping (Shop Menu)
@@ -154,6 +155,16 @@ async def start_shopping_callback(callback_query: types.CallbackQuery):
     await callback_query.message.answer(shop_menu_text, reply_markup=markup)
     await callback_query.message.answer("🛍️ Choose your next step below:", reply_markup=shop_keyboard)
 
+@dp.message(F.text == "🛒 Start Shopping")
+async def start_shopping_reply(message: types.Message):
+    buttons = [
+        [types.InlineKeyboardButton(text="🏬 Browse Shops", callback_data="browse_shops")],
+        [types.InlineKeyboardButton(text="🔍 Search Products", callback_data="search_products")],
+        [types.InlineKeyboardButton(text="💰 Best Deals", callback_data="best_deals")],
+        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")]
+    ]
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("🛍️ <b>Shop Menu</b>\nSelect an option below 👇", parse_mode="HTML", reply_markup=markup)
 
 # ------------------------------------------------
 # Shop Menu Button (from reply keyboard)
@@ -217,6 +228,26 @@ async def back_home_callback(callback_query: types.CallbackQuery, pool):
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback_query.message.answer(summary_text, reply_markup=markup)
 
+# ------------------------------------------------
+# Handle persistent keyboard: User Setting
+# ------------------------------------------------
+@dp.message(F.text == "⚙️ User Setting")
+async def user_setting_dashboard(message: types.Message):
+    user = message.from_user
+    text = (
+        f"⚙️ <b>User Dashboard</b>\n\n"
+        f"👋 Hello, <b>{user.first_name or 'friend'}</b>!\n\n"
+        "Manage your account and shop below 👇"
+    )
+
+    buttons = [
+        [types.InlineKeyboardButton(text="🏬 Create My Shop", callback_data="create_shop")],
+        [types.InlineKeyboardButton(text="📋 View My Shop", callback_data="view_shop")],
+        [types.InlineKeyboardButton(text="⬅️ Back to Home", callback_data="back_home")],
+    ]
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(text, reply_markup=markup)
 
 # ------------------------------------------------
 # Run Bot
