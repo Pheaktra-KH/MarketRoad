@@ -303,28 +303,28 @@ async def user_dashboard_show(user: types.User, target_message: Union[types.Mess
     if user_shop:
         user_text += f"\n🏪 <b>Your Shop:</b> {user_shop}\n"
 
+
     # Dashboard buttons
     buttons = [
         [types.InlineKeyboardButton(text="🧾 View All Orders", callback_data="view_orders")],
         [types.InlineKeyboardButton(text="✏️ Edit Profile", callback_data="edit_profile")],
         [types.InlineKeyboardButton(text="⬅️ Back to Shop Menu", callback_data="start_shopping")]
     ]
-    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    # ➕ ADD THIS BLOCK:
+    # ➕ FIXED ORDER — add this before building markup
     if user_shop:
-        # user already owns a shop
         buttons.insert(0, [types.InlineKeyboardButton(text="🏪 Manage My Shop", callback_data="manage_shop")])
     else:
-        # user is not a shop owner yet
         buttons.insert(0, [types.InlineKeyboardButton(text="🛍️ Create My Shop", callback_data="create_shop")])
+
+    # ✅ Build the markup *after* modifying buttons
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
     # send via message or callback query message
     if isinstance(target_message, types.Message):
         await target_message.answer(user_text, reply_markup=markup)
     else:
         await target_message.message.answer(user_text, reply_markup=markup)
-
 
 # ------------------------------------------------
 # Callback for "Start Shopping"
