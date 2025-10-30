@@ -311,6 +311,14 @@ async def user_dashboard_show(user: types.User, target_message: Union[types.Mess
     ]
     markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    # ➕ ADD THIS BLOCK:
+    if user_shop:
+        # user already owns a shop
+        buttons.insert(0, [types.InlineKeyboardButton(text="🏪 Manage My Shop", callback_data="manage_shop")])
+    else:
+        # user is not a shop owner yet
+        buttons.insert(0, [types.InlineKeyboardButton(text="🛍️ Create My Shop", callback_data="create_shop")])
+
     # send via message or callback query message
     if isinstance(target_message, types.Message):
         await target_message.answer(user_text, reply_markup=markup)
@@ -505,6 +513,56 @@ async def edit_field_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.message.answer(prompt)
 
 
+@dp.callback_query(F.data == "create_shop")
+async def create_shop_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+
+    # prevent duplicate shops
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT id FROM shops WHERE owner_id = $1 LIMIT 1;", user_id)
+    if exists:
+        await callback_query.message.answer("ℹ️ You already own a shop. Use “🏪 Manage My Shop”.")
+        return
+
+    # init wizard
+    set_state(dp, user_id, "shop_wizard", {"step": 1})
+    await callback_query.message.answer(
+        "🛍️ <b>Create My Shop</b>\n\n"
+        "Step 1/3: Send your <b>Shop Name</b>.\n"
+        "To cancel at any time, send /cancel."
+    )
+
+@dp.callback_query(F.data == "manage_shop")
+async def manage_shop_callback(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    async with pool.acquire() as conn:
+        shop = await conn.fetchrow("""
+            SELECT id, name, status, created_at
+            FROM shops
+            WHERE owner_id = $1
+            ORDER BY id ASC LIMIT 1;
+        """, user_id)
+
+    if not shop:
+        await callback_query.message.answer("ℹ️ You don’t have a shop yet. Use “🛍️ Create My Shop”.")
+        return
+
+    text = (
+        f"🏪 <b>{shop['name']}</b> (ID: {shop['id']})\n"
+        f"📌 Status: {shop['status']}\n"
+        f"📅 Created: {shop['created_at'].strftime('%Y-%m-%d')}\n\n"
+        "🧰 Owner tools coming next: add/edit/delete products, view orders, deals, etc."
+    )
+    buttons = [
+        [types.InlineKeyboardButton("➕ Add Product", callback_data="shop_add_product")],
+        [types.InlineKeyboardButton("🗂️ My Products", callback_data="shop_products")],
+        [types.InlineKeyboardButton("🧾 Shop Orders", callback_data="shop_orders")],
+        [types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")],
+    ]
+    await callback_query.message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+
 # ------------------------------------------------
 # /cancel command to abort pending edits
 # ------------------------------------------------
@@ -516,6 +574,15 @@ async def cancel_pending(message: types.Message):
             del dp["pending_field"]
             await message.answer("✅ Edit cancelled.")
             return
+
+    # ➕ ADD: cancel shop wizard too
+    if get_state(dp, message.from_user.id, "shop_wizard"):
+        del_state(dp, message.from_user.id, "shop_wizard")
+        await message.answer("✅ Shop creation cancelled.")
+        return
+
+    await message.answer("ℹ️ Nothing to cancel.")
+
     await message.answer("ℹ️ Nothing to cancel.")
 
 
@@ -546,6 +613,89 @@ async def update_field_handler(message: types.Message, pool):
 
     del dp["pending_field"]
     await message.answer(f"✅ Your {field} has been updated successfully.")
+
+@dp.message(F.text)
+async def shop_wizard_handler(message: types.Message, pool):
+    # Only act if user is in shop wizard
+    data = get_state(dp, message.from_user.id, "shop_wizard")
+    if not data:
+        return  # not in this flow
+
+    step = data.get("step", 1)
+    text = message.text.strip()
+
+    # STEP 1: Shop Name
+    if step == 1:
+        if len(text) < 3:
+            await message.answer("⚠️ Shop name is too short. Try again (≥ 3 chars).")
+            return
+        data["name"] = text
+        data["step"] = 2
+        set_state(dp, message.from_user.id, "shop_wizard", data)
+        await message.answer(
+            "Step 2/3: Send a short <b>Shop Description</b> (what you sell, highlight, etc.)."
+        )
+        return
+
+    # STEP 2: Description
+    if step == 2:
+        data["description"] = text[:500]  # cap length a bit
+        data["step"] = 3
+        set_state(dp, message.from_user.id, "shop_wizard", data)
+        await message.answer(
+            "Step 3/3: Send your <b>Bot Token</b> for this shop.\n"
+            "Tip: It looks like <code>123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11</code>"
+        )
+        return
+
+    # STEP 3: Bot Token
+    if step == 3:
+        bot_token = text
+        # minimal validation
+        if ":" not in bot_token or len(bot_token) < 25:
+            await message.answer("⚠️ That doesn’t look like a valid bot token. Please check and send again.")
+            return
+
+        user_id = message.from_user.id
+
+        async with pool.acquire() as conn:
+            # insert shop
+            shop_id = await conn.fetchval("""
+                INSERT INTO shops (name, owner_id, description, status, bot_token, telegram_link, created_at)
+                VALUES ($1, $2, $3, 'active', $4, $5, NOW())
+                RETURNING id;
+            """, data["name"], user_id, data["description"], bot_token, None)
+
+            # promote user role
+            await conn.execute("UPDATE users SET role = 'seller', updated_at = NOW() WHERE telegram_id = $1;", user_id)
+
+        # clear state
+        del_state(dp, user_id, "shop_wizard")
+
+        # confirm (do NOT echo the token)
+        await message.answer(
+            "✅ <b>Shop created!</b>\n\n"
+            f"🏪 <b>{data['name']}</b>\n"
+            f"🆔 Shop ID: <code>{shop_id}</code>\n"
+            "👑 You are now a <b>Shop Owner</b>.\n\n"
+            "Use “🏪 Manage My Shop” in your dashboard to handle products and orders."
+        )
+
+
+# -----------------------------
+# Minimal per-user temp state
+# -----------------------------
+def _mk_key(user_id: int, name: str) -> str:
+    return f"state:{name}:{user_id}"
+
+def set_state(dp, user_id: int, name: str, value):
+    dp[_mk_key(user_id, name)] = value
+
+def get_state(dp, user_id: int, name: str, default=None):
+    return dp.get(_mk_key(user_id, name), default)
+
+def del_state(dp, user_id: int, name: str):
+    dp.pop(_mk_key(user_id, name), None)
 
 
 # ------------------------------------------------
