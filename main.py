@@ -564,76 +564,149 @@ async def edit_field_callback(callback_query: types.CallbackQuery, pool):
     prompt = f"✏️ Please send your new {field} now. To cancel, send /cancel."
     await callback_query.message.answer(prompt)
 
+# ------------------------------------------------
+# SHOP SIGN-UP WIZARD — FIXED COMPLETE SECTION
+# ------------------------------------------------
+
+# 1️⃣ Start Wizard
 @dp.callback_query(F.data == "create_shop")
 async def create_shop_callback(callback_query: types.CallbackQuery, pool):
+    """Triggered when user taps 'Create My Shop'."""
     await callback_query.answer()
     user_id = callback_query.from_user.id
     chat = callback_query.message.chat
 
-    # Already owns a shop?
+    # Check if already owner
     async with pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM shops WHERE owner_id = $1 LIMIT 1;", user_id)
     if exists:
-        await callback_query.message.answer("ℹ️ You already own a shop. Use “🏪 Manage My Shop”.")
+        await callback_query.message.answer("ℹ️ You already own a shop. Use '🏪 Manage My Shop'.")
         return
 
-    # Init wizard state
+    # Initialize wizard state
     set_state(dp, user_id, "shop_wizard", {"step": 1})
-    print(f"[WIZARD] init step=1 for user={user_id} chat={chat.id} type={getattr(chat, 'type', '-')}")
     intro = (
         "🛍️ <b>Create My Shop</b>\n\n"
         "Step 1/6 — <b>Shop Name</b>\n"
-        "Please send your <b>shop name</b>.\n"
+        "Please send your shop name.\n"
         "Example: <i>Phka Coffee & Bakery</i>\n\n"
         "To cancel anytime: /cancel"
     )
 
-    # If we are in a group/supergroup/channel, move flow to DM
+    # Force to DM
     if getattr(chat, "type", "private") != "private":
         try:
             await bot.send_message(user_id, intro)
-            await callback_query.message.answer("📩 I’ve sent you a DM. Please continue the signup in our private chat.")
+            await callback_query.message.answer("📩 I’ve sent you a DM. Continue there!")
         except Exception:
-            await callback_query.message.answer(
-                "❗ I couldn't DM you. Please open a private chat with me and press Start, then try again."
-            )
+            await callback_query.message.answer("❗ Please open a private chat with me and press Start, then try again.")
         return
 
-    # Private chat — continue here
     await callback_query.message.answer(intro)
 
 
-@dp.callback_query(F.data == "manage_shop")
-async def manage_shop_callback(callback_query: types.CallbackQuery, pool):
-    await callback_query.answer()
-    user_id = callback_query.from_user.id
-    async with pool.acquire() as conn:
-        shop = await conn.fetchrow("""
-            SELECT id, name, status, created_at
-            FROM shops
-            WHERE owner_id = $1
-            ORDER BY id ASC LIMIT 1;
-        """, user_id)
+# 2️⃣ Handle all wizard text inputs
+@dp.message(F.text & F.chat.type == "private")
+async def shop_wizard_handler(message: types.Message, pool):
+    """Handle user text responses during shop creation."""
+    user_id = message.from_user.id
+    data = get_state(dp, user_id, "shop_wizard")
+    if not data:
+        return  # not in wizard
+    text = message.text.strip()
+    step = data.get("step", 1)
 
-    if not shop:
-        await callback_query.message.answer("ℹ️ You don’t have a shop yet. Use “🛍️ Create My Shop”.")
+    # STEP 1 — Shop Name
+    if step == 1:
+        if len(text) < 3:
+            await message.answer("⚠️ Shop name is too short. Try again.")
+            return
+        data["name"] = text
+        data["step"] = 2
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer(
+            "Step 2/6 — <b>Category</b>\nChoose your shop category:",
+            reply_markup=_inline_kb(SHOP_CATEGORIES, "shopcat")
+        )
         return
 
-    text = (
-        f"🏪 <b>{shop['name']}</b> (ID: {shop['id']})\n"
-        f"📌 Status: {shop['status']}\n"
-        f"📅 Created: {shop['created_at'].strftime('%Y-%m-%d')}\n\n"
-        "🧰 Owner tools coming next: add/edit/delete products, view orders, deals, etc."
-    )
-    buttons = [
-        [types.InlineKeyboardButton("➕ Add Product", callback_data="shop_add_product")],
-        [types.InlineKeyboardButton("🗂️ My Products", callback_data="shop_products")],
-        [types.InlineKeyboardButton("🧾 Shop Orders", callback_data="shop_orders")],
-        [types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")],
-    ]
-    await callback_query.message.answer(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=buttons))
+    # STEP 4 — Description
+    if step == 4:
+        data["description"] = text[:500]
+        data["step"] = 5
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer("Step 5/6 — <b>Contact Info</b>\nSend your phone number.")
+        return
 
-# Step 2: category select
+    # STEP 5A — Phone
+    if step == 5 and "contact_phone" not in data:
+        if len(text) < 6:
+            await message.answer("⚠️ Invalid phone number. Try again.")
+            return
+        data["contact_phone"] = text
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer("Now send your contact email (or '-' to skip).")
+        return
+
+    # STEP 5B — Email
+    if step == 5 and "contact_phone" in data and "contact_email" not in data:
+        email = None if text == "-" else text
+        if email and ("@" not in email or "." not in email):
+            await message.answer("⚠️ Invalid email. Try again or type '-' to skip.")
+            return
+        data["contact_email"] = email
+        data["step"] = 6
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer("Step 6/6 — <b>Bot Info</b>\nSend your bot username (e.g. @MyShopBot).")
+        return
+
+    # STEP 6A — Bot Username
+    if step == 6 and "bot_username" not in data:
+        username = text if text.startswith("@") else f"@{text}"
+        data["bot_username"] = username
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer("Now send your bot token.")
+        return
+
+    # STEP 6B — Bot Token
+    if step == 6 and "bot_username" in data and "bot_token" not in data:
+        token = text
+        if ":" not in token:
+            await message.answer("⚠️ Invalid bot token format. Try again.")
+            return
+        data["bot_token"] = token
+
+        bot_id, bot_name, bot_user = await try_fetch_bot_info(token)
+        data.update({"bot_id": bot_id, "bot_name": bot_name, "bot_username": bot_user})
+        data["step"] = 7
+        set_state(dp, user_id, "shop_wizard", data)
+
+        await message.answer("📍 Location — Please send your city name.")
+        return
+
+    # STEP 7A — City
+    if step == 7 and "city" not in data:
+        data["city"] = text
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer("Now send your province (or '-' to skip).")
+        return
+
+    # STEP 7B — Province
+    if step == 7 and "province" not in data:
+        data["province"] = None if text == "-" else text
+        data["country"] = "Cambodia"
+        data["step"] = 8
+        set_state(dp, user_id, "shop_wizard", data)
+        await message.answer(
+            "🚚 Delivery Option — Choose one:",
+            reply_markup=_inline_kb(DELIVERY_OPTIONS, "shopdelivery")
+        )
+        return
+
+    await message.answer("ℹ️ Please follow the prompts or /cancel to stop.")
+
+
+# 3️⃣ Step 2 — Category choice
 @dp.callback_query(F.data.startswith("shopcat:"))
 async def shop_category_select(callback_query: types.CallbackQuery):
     await callback_query.answer()
@@ -645,12 +718,12 @@ async def shop_category_select(callback_query: types.CallbackQuery):
     data["step"] = 3
     set_state(dp, user_id, "shop_wizard", data)
     await callback_query.message.answer(
-        "Step 3/6 — <b>Shop Type</b>\n"
-        "What type of business is this?",
+        "Step 3/6 — <b>Shop Type</b>\nSelect your business type:",
         reply_markup=_inline_kb(SHOP_TYPES, "shoptype")
     )
 
-# Step 3: type select
+
+# 4️⃣ Step 3 — Type choice
 @dp.callback_query(F.data.startswith("shoptype:"))
 async def shop_type_select(callback_query: types.CallbackQuery):
     await callback_query.answer()
@@ -661,12 +734,10 @@ async def shop_type_select(callback_query: types.CallbackQuery):
     data["type"] = callback_query.data.split(":", 1)[1]
     data["step"] = 4
     set_state(dp, user_id, "shop_wizard", data)
-    await callback_query.message.answer(
-        "Step 4/6 — <b>Description</b>\n"
-        "Describe what your shop sells or offers (max 500 chars)."
-    )
+    await callback_query.message.answer("Step 4/6 — <b>Description</b>\nPlease describe your shop.")
 
-# Step 6a: delivery option select
+
+# 5️⃣ Step 8 — Delivery option
 @dp.callback_query(F.data.startswith("shopdelivery:"))
 async def shop_delivery_select(callback_query: types.CallbackQuery):
     await callback_query.answer()
@@ -677,20 +748,17 @@ async def shop_delivery_select(callback_query: types.CallbackQuery):
     data["delivery_option"] = callback_query.data.split(":", 1)[1]
     data["step"] = 9
     set_state(dp, user_id, "shop_wizard", data)
-
-    # Policy confirmation
-    text = (
-        "Step 9/9 — <b>Seller Policy</b>\n"
-        "By proceeding, you confirm your shop information is accurate and you agree to our seller policy.\n\n"
-        "Tap to continue:"
-    )
     kb = types.InlineKeyboardMarkup(inline_keyboard=[
-        [types.InlineKeyboardButton(text="✅ I Agree", callback_data="shopagree:yes")],
-        [types.InlineKeyboardButton(text="❌ Cancel", callback_data="shopagree:no")]
+        [types.InlineKeyboardButton("✅ I Agree", callback_data="shopagree:yes")],
+        [types.InlineKeyboardButton("❌ Cancel", callback_data="shopagree:no")]
     ])
-    await callback_query.message.answer(text, reply_markup=kb)
+    await callback_query.message.answer(
+        "Step 9/9 — Confirm Policy\nAgree to submit your shop information:",
+        reply_markup=kb
+    )
 
-# Final: policy agree
+
+# 6️⃣ Final Step — Insert to DB
 @dp.callback_query(F.data.startswith("shopagree:"))
 async def shop_policy_agree(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
@@ -702,56 +770,38 @@ async def shop_policy_agree(callback_query: types.CallbackQuery, pool):
 
     if agree != "yes":
         del_state(dp, user_id, "shop_wizard")
-        await callback_query.message.answer("❌ Shop registration cancelled.")
+        await callback_query.message.answer("❌ Cancelled.")
         return
 
-    # Insert to DB
     async with pool.acquire() as conn:
-        shop_id = await conn.fetchval("""
+        await conn.execute("""
             INSERT INTO shops (
-                name, owner_id, description,
-                category, type, type_detail,
+                name, owner_id, description, category, type,
                 contact_phone, contact_email,
-                city, province, country,
-                delivery_option,
+                city, province, country, delivery_option,
                 bot_token, bot_username, bot_id, bot_name,
-                policy_agreed, status,
-                submitted_at, created_at
-            )
-            VALUES (
-                $1, $2, $3,
-                $4, $5, $6,
-                $7, $8,
-                $9, $10, COALESCE($11, 'Cambodia'),
-                $12,
-                $13, $14, $15, $16,
-                TRUE, 'pending',
-                NOW(), NOW()
-            )
-            RETURNING id;
-        """, 
-        data["name"], user_id, data.get("description"),
-        data.get("category"), data.get("type"), data.get("type_detail"),
-        data.get("contact_phone"), data.get("contact_email"),
-        data.get("city"), data.get("province"), data.get("country"),
-        data.get("delivery_option"),
-        data.get("bot_token"), data.get("bot_username"), data.get("bot_id"), data.get("bot_name"))
-
-        await conn.execute(
-            "UPDATE users SET role = 'seller', updated_at = NOW() WHERE telegram_id = $1;", user_id
+                policy_agreed, status, submitted_at, created_at
+            ) VALUES (
+                $1,$2,$3,$4,$5,
+                $6,$7,$8,$9,COALESCE($10,'Cambodia'),
+                $11,$12,$13,$14,$15,
+                TRUE,'pending',NOW(),NOW()
+            );
+        """,
+            data["name"], user_id, data.get("description"),
+            data.get("category"), data.get("type"),
+            data.get("contact_phone"), data.get("contact_email"),
+            data.get("city"), data.get("province"), data.get("country"),
+            data.get("delivery_option"),
+            data.get("bot_token"), data.get("bot_username"),
+            data.get("bot_id"), data.get("bot_name")
         )
+        await conn.execute("UPDATE users SET role='seller', updated_at=NOW() WHERE telegram_id=$1;", user_id)
 
     del_state(dp, user_id, "shop_wizard")
     await callback_query.message.answer(
-        "✅ <b>Shop registered!</b>\n\n"
-        f"🏪 <b>{data['name']}</b>\n"
-        f"🗂 Category: {data.get('category') or '-'} | Type: {data.get('type') or '-'}\n"
-        f"🤖 Bot: {data.get('bot_username') or '-'}\n"
-        "📌 Status: <b>Pending</b>\n\n"
-        "Use “🏪 Manage My Shop” in your dashboard to continue."
+        f"✅ <b>Shop Registered!</b>\n🏪 {data['name']}\nCategory: {data.get('category')}\nStatus: Pending Review"
     )
-
-
 
 
 # ------------------------------------------------
