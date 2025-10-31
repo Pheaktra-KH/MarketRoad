@@ -785,7 +785,7 @@ async def cancel_pending(message: types.Message):
 # ==========================================
 # SHOP SIGN-UP WIZARD HANDLER (FULL PATCH)
 # ==========================================
-@dp.message(F.text)
+@dp.message(F.text & F.chat.type == "private")
 async def shop_wizard_handler(message: types.Message, pool):
     """
     Handles the multi-step shop sign-up wizard.
@@ -930,6 +930,36 @@ async def shop_wizard_handler(message: types.Message, pool):
     # DEFAULT / FALLBACK
     # -------------------------------
     await message.answer("ℹ️ Please follow the prompts. To cancel, use /cancel.")
+
+@dp.message(F.text & F.chat.type == "private")
+async def update_field_handler(message: types.Message, pool):
+    # 🔹 Skip if user currently in shop wizard
+    if get_state(dp, message.from_user.id, "shop_wizard"):
+        return
+
+    if "pending_field" not in dp:
+        return  # not editing
+
+    user_id, field = dp["pending_field"]
+    if message.from_user.id != user_id:
+        return
+
+    new_value = message.text.strip()
+    valid_fields = ["phone", "email", "city", "language"]
+
+    if field not in valid_fields:
+        await message.answer("⚠️ Invalid field.")
+        return
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE telegram_id = $2;",
+            new_value, user_id
+        )
+
+    del dp["pending_field"]
+    await message.answer(f"✅ Your {field} has been updated successfully.")
+
 
 # ==========================================
 # SHOP WIZARD CALLBACK HANDLERS (FULL PATCH)
@@ -1174,37 +1204,6 @@ async def shop_edit_info_placeholder(callback_query: types.CallbackQuery):
         "✏️ <b>Edit Shop Info</b> — Coming soon!\n\n"
         "Soon you’ll be able to update your shop’s name, description, contact info, and bot details."
     )
-
-
-
-
-@dp.message(F.text)
-async def update_field_handler(message: types.Message, pool):
-    if get_state(dp, message.from_user.id, "shop_wizard"):
-        return  # user is in shop flow, ignore
-
-    if "pending_field" not in dp:
-        return  # not editing
-
-    user_id, field = dp["pending_field"]
-    if message.from_user.id != user_id:
-        return
-
-    new_value = message.text.strip()
-    valid_fields = ["phone", "email", "city", "language"]
-
-    if field not in valid_fields:
-        await message.answer("⚠️ Invalid field.")
-        return
-
-    async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE telegram_id = $2;",
-            new_value, user_id
-        )
-
-    del dp["pending_field"]
-    await message.answer(f"✅ Your {field} has been updated successfully.")
 
 # -----------------------------
 # Minimal per-user temp state (robust)
