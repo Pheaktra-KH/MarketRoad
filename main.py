@@ -908,6 +908,253 @@ async def shop_wizard_handler(message: types.Message, pool):
     # -------------------------------
     await message.answer("ℹ️ Please follow the prompts. To cancel, use /cancel.")
 
+# ==========================================
+# SHOP WIZARD CALLBACK HANDLERS (FULL PATCH)
+# ==========================================
+
+# 🔹 Step 2 — Category Selection
+@dp.callback_query(F.data.startswith("shopcat:"))
+async def shop_category_select(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    data = get_state(dp, user_id, "shop_wizard")
+    if not data or data.get("step") != 2:
+        return
+
+    category_val = callback_query.data.split(":", 1)[1]
+    data["category"] = category_val
+    data["step"] = 3
+    set_state(dp, user_id, "shop_wizard", data)
+
+    await callback_query.message.answer(
+        "Step 3/6 — <b>Shop Type</b>\n"
+        "What kind of business is this?",
+        reply_markup=_inline_kb(SHOP_TYPES, "shoptype")
+    )
+
+
+# 🔹 Step 3 — Business Type Selection
+@dp.callback_query(F.data.startswith("shoptype:"))
+async def shop_type_select(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    data = get_state(dp, user_id, "shop_wizard")
+    if not data or data.get("step") != 3:
+        return
+
+    type_val = callback_query.data.split(":", 1)[1]
+    data["type"] = type_val
+    data["step"] = 4
+    set_state(dp, user_id, "shop_wizard", data)
+
+    await callback_query.message.answer(
+        "Step 4/6 — <b>Description</b>\n"
+        "Please describe what your shop sells or offers (max 500 chars)."
+    )
+
+
+# 🔹 Step 8 — Delivery Option
+@dp.callback_query(F.data.startswith("shopdelivery:"))
+async def shop_delivery_select(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    data = get_state(dp, user_id, "shop_wizard")
+    if not data or data.get("step") != 8:
+        return
+
+    delivery_val = callback_query.data.split(":", 1)[1]
+    data["delivery_option"] = delivery_val
+    data["step"] = 9
+    set_state(dp, user_id, "shop_wizard", data)
+
+    # Confirm seller policy
+    text = (
+        "Step 9/9 — <b>Seller Policy</b>\n"
+        "By proceeding, you confirm that all your shop information is true "
+        "and that you agree to our seller terms and policies.\n\n"
+        "Tap to confirm:"
+    )
+    kb = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="✅ I Agree", callback_data="shopagree:yes")],
+        [types.InlineKeyboardButton(text="❌ Cancel", callback_data="shopagree:no")]
+    ])
+    await callback_query.message.answer(text, reply_markup=kb)
+
+
+# 🔹 Step 9 — Policy Agreement / Final Insert
+@dp.callback_query(F.data.startswith("shopagree:"))
+async def shop_policy_agree(callback_query: types.CallbackQuery, pool):
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    agree = callback_query.data.split(":", 1)[1]
+    data = get_state(dp, user_id, "shop_wizard")
+    if not data or data.get("step") != 9:
+        return
+
+    # User canceled
+    if agree != "yes":
+        del_state(dp, user_id, "shop_wizard")
+        await callback_query.message.answer("❌ Shop registration cancelled.")
+        return
+
+    # ✅ Save to database
+    async with pool.acquire() as conn:
+        shop_id = await conn.fetchval("""
+            INSERT INTO shops (
+                name, owner_id, description,
+                category, type, type_detail,
+                contact_phone, contact_email,
+                city, province, country,
+                delivery_option,
+                bot_token, bot_username, bot_id, bot_name,
+                policy_agreed, status,
+                submitted_at, created_at
+            )
+            VALUES (
+                $1, $2, $3,
+                $4, $5, $6,
+                $7, $8,
+                $9, $10, COALESCE($11, 'Cambodia'),
+                $12,
+                $13, $14, $15, $16,
+                TRUE, 'pending',
+                NOW(), NOW()
+            )
+            RETURNING id;
+        """,
+        data.get("name"),
+        user_id,
+        data.get("description"),
+        data.get("category"),
+        data.get("type"),
+        data.get("type_detail"),
+        data.get("contact_phone"),
+        data.get("contact_email"),
+        data.get("city"),
+        data.get("province"),
+        data.get("country"),
+        data.get("delivery_option"),
+        data.get("bot_token"),
+        data.get("bot_username"),
+        data.get("bot_id"),
+        data.get("bot_name")
+        )
+
+        await conn.execute(
+            "UPDATE users SET role = 'seller', updated_at = NOW() WHERE telegram_id = $1;",
+            user_id
+        )
+
+    del_state(dp, user_id, "shop_wizard")
+
+    # 🎉 Success message
+    await callback_query.message.answer(
+        "✅ <b>Your shop has been successfully registered!</b>\n\n"
+        f"🏪 <b>{data.get('name')}</b>\n"
+        f"📂 Category: {data.get('category') or '-'} | Type: {data.get('type') or '-'}\n"
+        f"🤖 Bot: {data.get('bot_username') or '-'}\n"
+        f"📍 Location: {data.get('city') or '-'}, {data.get('province') or '-'}\n"
+        f"📦 Delivery: {data.get('delivery_option') or '-'}\n\n"
+        "📌 Status: <b>Pending Review</b>\n"
+        "Once approved, you can manage your products and orders from “🏪 Manage My Shop”."
+    )
+
+# ==========================================
+# 🏪 MANAGE MY SHOP SECTION
+# ==========================================
+
+@dp.callback_query(F.data == "manage_shop")
+async def manage_shop_callback(callback_query: types.CallbackQuery, pool):
+    """Display the shop overview for the logged-in shop owner."""
+    await callback_query.answer()
+    user_id = callback_query.from_user.id
+
+    async with pool.acquire() as conn:
+        shop = await conn.fetchrow("""
+            SELECT id, name, category, type, description,
+                   bot_username, bot_name, status,
+                   city, province, country,
+                   delivery_option, is_verified, created_at
+            FROM shops
+            WHERE owner_id = $1
+            ORDER BY id DESC
+            LIMIT 1;
+        """, user_id)
+
+    # no shop
+    if not shop:
+        await callback_query.message.answer(
+            "ℹ️ You don't have a shop yet. Use “🛍️ Create My Shop” first."
+        )
+        return
+
+    # shop summary text
+    verified_mark = "✅" if shop["is_verified"] else "⏳"
+    text = (
+        f"<b>🏪 {shop['name']}</b> ({verified_mark} {shop['status'].capitalize()})\n"
+        f"📂 <b>Category:</b> {shop['category'] or '-'} | <b>Type:</b> {shop['type'] or '-'}\n"
+        f"🤖 <b>Bot:</b> {shop['bot_username'] or '-'} ({shop['bot_name'] or 'Unnamed'})\n"
+        f"📍 <b>Location:</b> {shop['city'] or '-'}, {shop['province'] or '-'}, {shop['country'] or '-'}\n"
+        f"🚚 <b>Delivery:</b> {shop['delivery_option'] or '-'}\n\n"
+        f"📝 <b>Description:</b>\n{shop['description'] or '(none)'}\n\n"
+        f"📅 <b>Created:</b> {shop['created_at'].strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    # buttons
+    buttons = [
+        [types.InlineKeyboardButton("➕ Add Product", callback_data="shop_add_product")],
+        [types.InlineKeyboardButton("🗂️ My Products", callback_data="shop_products")],
+        [types.InlineKeyboardButton("🧾 Shop Orders", callback_data="shop_orders")],
+        [types.InlineKeyboardButton("✏️ Edit Shop Info", callback_data="shop_edit_info")],
+        [types.InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="user_settings")],
+    ]
+
+    markup = types.InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback_query.message.answer(text, reply_markup=markup)
+
+
+# ==========================================
+# PLACEHOLDER CALLBACKS FOR FUTURE FEATURES
+# ==========================================
+
+@dp.callback_query(F.data == "shop_add_product")
+async def shop_add_product_placeholder(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    await callback_query.message.answer(
+        "🧱 <b>Add Product</b> — Coming soon!\n\n"
+        "This section will let you create new products directly from Telegram."
+    )
+
+
+@dp.callback_query(F.data == "shop_products")
+async def shop_products_placeholder(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    await callback_query.message.answer(
+        "🗂️ <b>My Products</b> — Coming soon!\n\n"
+        "Here you’ll see all your products and can edit or delete them."
+    )
+
+
+@dp.callback_query(F.data == "shop_orders")
+async def shop_orders_placeholder(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    await callback_query.message.answer(
+        "🧾 <b>Shop Orders</b> — Coming soon!\n\n"
+        "You’ll be able to track orders for your shop here."
+    )
+
+
+@dp.callback_query(F.data == "shop_edit_info")
+async def shop_edit_info_placeholder(callback_query: types.CallbackQuery):
+    await callback_query.answer()
+    await callback_query.message.answer(
+        "✏️ <b>Edit Shop Info</b> — Coming soon!\n\n"
+        "Soon you’ll be able to update your shop’s name, description, contact info, and bot details."
+    )
+
+
+
+
 @dp.message(F.text)
 async def update_field_handler(message: types.Message, pool):
     if get_state(dp, message.from_user.id, "shop_wizard"):
