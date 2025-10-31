@@ -763,33 +763,12 @@ async def cancel_pending(message: types.Message):
 # ------------------------------------------------
 # Message Handler: Update Field
 # ------------------------------------------------
-@dp.message(F.text)
-async def update_field_handler(message: types.Message, pool):
-    if "pending_field" not in dp:
-        return  # not editing
-
-    user_id, field = dp["pending_field"]
-    if message.from_user.id != user_id:
-        return
-
-    new_value = message.text.strip()
-    valid_fields = ["phone", "email", "city", "language"]
-
-    if field not in valid_fields:
-        await message.answer("⚠️ Invalid field.")
-        return
-
-    async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE telegram_id = $2;",
-            new_value, user_id
-        )
-
-    del dp["pending_field"]
-    await message.answer(f"✅ Your {field} has been updated successfully.")
 
 @dp.message(F.text)
 async def shop_wizard_handler(message: types.Message, pool):
+    if "pending_field" in dp and dp["pending_field"][0] == message.from_user.id:
+    return  # user is editing profile, skip wizard
+
     data = get_state(dp, message.from_user.id, "shop_wizard")
     if not data:
         return  # not in shop flow
@@ -904,6 +883,33 @@ async def shop_wizard_handler(message: types.Message, pool):
     # Fallback
     await message.answer("ℹ️ Please follow the prompts. To cancel, use /cancel.")
 
+@dp.message(F.text)
+async def update_field_handler(message: types.Message, pool):
+    if get_state(dp, message.from_user.id, "shop_wizard"):
+    return  # user is in shop flow, ignore
+
+    if "pending_field" not in dp:
+        return  # not editing
+
+    user_id, field = dp["pending_field"]
+    if message.from_user.id != user_id:
+        return
+
+    new_value = message.text.strip()
+    valid_fields = ["phone", "email", "city", "language"]
+
+    if field not in valid_fields:
+        await message.answer("⚠️ Invalid field.")
+        return
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE users SET {field} = $1, updated_at = NOW() WHERE telegram_id = $2;",
+            new_value, user_id
+        )
+
+    del dp["pending_field"]
+    await message.answer(f"✅ Your {field} has been updated successfully.")
 
 # -----------------------------
 # Minimal per-user temp state
