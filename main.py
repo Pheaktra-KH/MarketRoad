@@ -568,23 +568,39 @@ async def edit_field_callback(callback_query: types.CallbackQuery, pool):
 async def create_shop_callback(callback_query: types.CallbackQuery, pool):
     await callback_query.answer()
     user_id = callback_query.from_user.id
+    chat = callback_query.message.chat
 
+    # Already owns a shop?
     async with pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM shops WHERE owner_id = $1 LIMIT 1;", user_id)
     if exists:
         await callback_query.message.answer("ℹ️ You already own a shop. Use “🏪 Manage My Shop”.")
         return
-        print(f"[WIZARD] init step=1 for user={user_id}")
 
-    # init wizard state
+    # Init wizard state
     set_state(dp, user_id, "shop_wizard", {"step": 1})
-    await callback_query.message.answer(
+    print(f"[WIZARD] init step=1 for user={user_id} chat={chat.id} type={getattr(chat, 'type', '-')}")
+    intro = (
         "🛍️ <b>Create My Shop</b>\n\n"
         "Step 1/6 — <b>Shop Name</b>\n"
         "Please send your <b>shop name</b>.\n"
         "Example: <i>Phka Coffee & Bakery</i>\n\n"
         "To cancel anytime: /cancel"
     )
+
+    # If we are in a group/supergroup/channel, move flow to DM
+    if getattr(chat, "type", "private") != "private":
+        try:
+            await bot.send_message(user_id, intro)
+            await callback_query.message.answer("📩 I’ve sent you a DM. Please continue the signup in our private chat.")
+        except Exception:
+            await callback_query.message.answer(
+                "❗ I couldn't DM you. Please open a private chat with me and press Start, then try again."
+            )
+        return
+
+    # Private chat — continue here
+    await callback_query.message.answer(intro)
 
 
 @dp.callback_query(F.data == "manage_shop")
@@ -743,6 +759,10 @@ async def shop_policy_agree(callback_query: types.CallbackQuery, pool):
 # ------------------------------------------------
 @dp.message(Command("cancel"))
 async def cancel_pending(message: types.Message):
+    # Only act in private chat
+    if getattr(message.chat, "type", "private") != "private":
+        return
+        
     if "pending_field" in dp:
         stored_user_id, _ = dp["pending_field"]
         if stored_user_id == message.from_user.id:
@@ -771,6 +791,10 @@ async def shop_wizard_handler(message: types.Message, pool):
     Handles the multi-step shop sign-up wizard.
     Each step collects user input and moves forward in the state.
     """
+    # NEW: only handle wizard in private chat
+    if getattr(message.chat, "type", "private") != "private":
+        return
+        
     # 🔹 Skip if user is editing profile
     if "pending_field" in dp and dp["pending_field"][0] == message.from_user.id:
         return
