@@ -574,6 +574,7 @@ async def create_shop_callback(callback_query: types.CallbackQuery, pool):
     if exists:
         await callback_query.message.answer("ℹ️ You already own a shop. Use “🏪 Manage My Shop”.")
         return
+        print(f"[WIZARD] init step=1 for user={user_id}")
 
     # init wizard state
     set_state(dp, user_id, "shop_wizard", {"step": 1})
@@ -754,8 +755,6 @@ async def cancel_pending(message: types.Message):
         del_state(dp, message.from_user.id, "shop_wizard")
         await message.answer("✅ Shop creation cancelled.")
         return
-
-    await message.answer("ℹ️ Nothing to cancel.")
 
     await message.answer("ℹ️ Nothing to cancel.")
 
@@ -1184,19 +1183,22 @@ async def update_field_handler(message: types.Message, pool):
     await message.answer(f"✅ Your {field} has been updated successfully.")
 
 # -----------------------------
-# Minimal per-user temp state
+# Minimal per-user temp state (robust)
 # -----------------------------
+_SHOP_STATE = {}  # in-memory store
+
 def _mk_key(user_id: int, name: str) -> str:
     return f"state:{name}:{user_id}"
 
-def set_state(dp, user_id: int, name: str, value):
-    dp[_mk_key(user_id, name)] = value
+def set_state(_dp_unused, user_id: int, name: str, value):
+    _SHOP_STATE[_mk_key(user_id, name)] = value
 
-def get_state(dp, user_id: int, name: str, default=None):
-    return dp.get(_mk_key(user_id, name), default)
+def get_state(_dp_unused, user_id: int, name: str, default=None):
+    return _SHOP_STATE.get(_mk_key(user_id, name), default)
 
-def del_state(dp, user_id: int, name: str):
-    dp.pop(_mk_key(user_id, name), None)
+def del_state(_dp_unused, user_id: int, name: str):
+    _SHOP_STATE.pop(_mk_key(user_id, name), None)
+
 
 
 # ------------------------------------------------
