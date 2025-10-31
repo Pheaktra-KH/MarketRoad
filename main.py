@@ -763,20 +763,33 @@ async def cancel_pending(message: types.Message):
 # ------------------------------------------------
 # Message Handler: Update Field
 # ------------------------------------------------
-
+# ==========================================
+# SHOP SIGN-UP WIZARD HANDLER (FULL PATCH)
+# ==========================================
 @dp.message(F.text)
 async def shop_wizard_handler(message: types.Message, pool):
+    """
+    Handles the multi-step shop sign-up wizard.
+    Each step collects user input and moves forward in the state.
+    """
+    # 🔹 Skip if user is editing profile
     if "pending_field" in dp and dp["pending_field"][0] == message.from_user.id:
-        return  # user is editing profile, skip wizard
+        return
 
+    # 🔹 Retrieve wizard data
     data = get_state(dp, message.from_user.id, "shop_wizard")
     if not data:
-        return  # not in shop flow
+        return  # user not in wizard flow
+
+    # Debug (you can keep it to see flow)
+    print(f"🧩 shop_wizard_handler triggered, step={data.get('step')} user={message.from_user.id}")
 
     step = data.get("step", 1)
     text = message.text.strip()
 
-    # STEP 1/6: Shop Name
+    # -------------------------------
+    # STEP 1/6 — Shop Name
+    # -------------------------------
     if step == 1:
         if len(text) < 3:
             await message.answer("⚠️ Shop name is too short. Try again (≥ 3 chars).")
@@ -785,50 +798,56 @@ async def shop_wizard_handler(message: types.Message, pool):
         data["step"] = 2
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer(
-            "Step 2/6 — <b>Category</b>\n"
-            "Choose the closest category:",
+            "Step 2/6 — <b>Category</b>\nChoose the closest category:",
             reply_markup=_inline_kb(SHOP_CATEGORIES, "shopcat")
         )
         return
 
-    # STEP 4/6: Description (after category+type via callbacks)
+    # -------------------------------
+    # STEP 4/6 — Description (after category + type)
+    # -------------------------------
     if step == 4:
         data["description"] = text[:500]
         data["step"] = 5
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer(
-            "Step 5/6 — <b>Contact</b>\n"
-            "Send your <b>phone number</b> (WhatsApp/Telegram)."
+            "Step 5/6 — <b>Contact Information</b>\n"
+            "Please send your <b>phone number</b> (WhatsApp/Telegram)."
         )
         return
 
-    # STEP 5/6A: Contact phone
+    # -------------------------------
+    # STEP 5A — Contact Phone
+    # -------------------------------
     if step == 5 and "contact_phone" not in data:
-        # naive phone validation
         if len(text) < 6:
-            await message.answer("⚠️ Phone looks invalid. Try again.")
+            await message.answer("⚠️ That phone number looks invalid. Try again.")
             return
         data["contact_phone"] = text
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer("Now send your <b>contact email</b> (or type '-' to skip).")
         return
 
-    # STEP 5/6B: Contact email
+    # -------------------------------
+    # STEP 5B — Contact Email
+    # -------------------------------
     if step == 5 and "contact_phone" in data and "contact_email" not in data:
         email = None if text == "-" else text
         if email and ("@" not in email or "." not in email):
-            await message.answer("⚠️ Email looks invalid. Try again or type '-' to skip.")
+            await message.answer("⚠️ That email looks invalid. Try again or type '-' to skip.")
             return
         data["contact_email"] = email
         data["step"] = 6
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer(
             "Step 6/6 — <b>Bot Info</b>\n"
-            "Send your <b>bot username</b> (format: @YourBotUsername)."
+            "Send your <b>bot username</b> (e.g. @YourShopBot)."
         )
         return
 
-    # STEP 6A: Bot username
+    # -------------------------------
+    # STEP 6A — Bot Username
+    # -------------------------------
     if step == 6 and "bot_username" not in data:
         username = text if text.startswith("@") else f"@{text}"
         data["bot_username"] = username
@@ -836,7 +855,9 @@ async def shop_wizard_handler(message: types.Message, pool):
         await message.answer("Now send your <b>bot token</b>.")
         return
 
-    # STEP 6B: Bot token -> then move to STEP 7 for location
+    # -------------------------------
+    # STEP 6B — Bot Token
+    # -------------------------------
     if step == 6 and "bot_username" in data and "bot_token" not in data:
         token = text
         if ":" not in token or len(token) < 25:
@@ -844,31 +865,33 @@ async def shop_wizard_handler(message: types.Message, pool):
             return
         data["bot_token"] = token
 
-        # Try to verify & fetch bot info
+        # Try to verify the bot token
         bot_id, bot_name, bot_username_verified = await try_fetch_bot_info(token)
         if bot_id:
             data["bot_id"] = bot_id
             data["bot_name"] = bot_name
-            # trust verified username if available
             if bot_username_verified:
                 data["bot_username"] = bot_username_verified
 
         data["step"] = 7
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer(
-            "Extra — <b>Location</b>\n"
-            "Send your <b>City</b> (e.g., Phnom Penh)."
+            "Extra — <b>Location</b>\nPlease send your <b>City</b> (e.g., Phnom Penh)."
         )
         return
 
-    # STEP 7A: City
+    # -------------------------------
+    # STEP 7A — City
+    # -------------------------------
     if step == 7 and "city" not in data:
         data["city"] = text
         set_state(dp, message.from_user.id, "shop_wizard", data)
         await message.answer("Now send your <b>Province</b> (or type '-' to skip).")
         return
 
-    # STEP 7B: Province -> go to STEP 8 delivery
+    # -------------------------------
+    # STEP 7B — Province
+    # -------------------------------
     if step == 7 and "city" in data and "province" not in data:
         data["province"] = None if text == "-" else text
         data["country"] = "Cambodia"
@@ -880,7 +903,9 @@ async def shop_wizard_handler(message: types.Message, pool):
         )
         return
 
-    # Fallback
+    # -------------------------------
+    # DEFAULT / FALLBACK
+    # -------------------------------
     await message.answer("ℹ️ Please follow the prompts. To cancel, use /cancel.")
 
 @dp.message(F.text)
