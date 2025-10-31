@@ -767,7 +767,7 @@ async def cancel_pending(message: types.Message):
 @dp.message(F.text)
 async def shop_wizard_handler(message: types.Message, pool):
     if "pending_field" in dp and dp["pending_field"][0] == message.from_user.id:
-    return  # user is editing profile, skip wizard
+        return  # user is editing profile, skip wizard
 
     data = get_state(dp, message.from_user.id, "shop_wizard")
     if not data:
@@ -886,7 +886,7 @@ async def shop_wizard_handler(message: types.Message, pool):
 @dp.message(F.text)
 async def update_field_handler(message: types.Message, pool):
     if get_state(dp, message.from_user.id, "shop_wizard"):
-    return  # user is in shop flow, ignore
+        return  # user is in shop flow, ignore
 
     if "pending_field" not in dp:
         return  # not editing
